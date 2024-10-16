@@ -24,17 +24,23 @@ check_node_exists() {
     return $?
 }
 
-generate_network_key_secret() {
+generate_network_key_zmq() {
     local key_dir="kubernetes-manifests/generated/network_keys"
     mkdir -p "$key_dir"
 
-    # Generate CURVE25519 key pair
-    private_key=$(openssl genpkey -algorithm X25519 -outform PEM | grep -v "BEGIN\|END")
-    public_key=$(echo "$private_key" | openssl pkey -pubout -outform PEM | grep -v "BEGIN\|END")
+    # Install dependencies and compile curve_keygen
+    sudo apt-get update && sudo apt-get install -y g++ libzmq3-dev
+    wget https://raw.githubusercontent.com/zeromq/libzmq/master/tools/curve_keygen.cpp
+    g++ curve_keygen.cpp -o curve_keygen -lzmq
+
+    # Generate keys
+    key_output=$(./curve_keygen)
+    public_key=$(echo "$key_output" | grep "CURVE PUBLIC KEY" -A 1 | tail -n 1)
+    private_key=$(echo "$key_output" | grep "CURVE SECRET KEY" -A 1 | tail -n 1)
 
     # Save keys to files (for reference, consider removing in production)
-    echo "$private_key" > "$key_dir/network_private.key"
     echo "$public_key" > "$key_dir/network_public.key"
+    echo "$private_key" > "$key_dir/network_private.key"
 
     # Create a Kubernetes Secret YAML
     cat << EOF > kubernetes-manifests/generated/network-key-secret.yaml
@@ -49,6 +55,9 @@ stringData:
 EOF
 
     echo "Network key Secret YAML has been created at kubernetes-manifests/generated/network-key-secret.yaml"
+
+    # Clean up
+    rm curve_keygen curve_keygen.cpp
 }
 
 generate_ssl_certificates() {
@@ -882,7 +891,7 @@ echo "All required nodes are present in the cluster."
 
 # Generate SSL/TLS certificates
 generate_ssl_certificates "$num_fog_nodes"
-generate_network_key_secret
+generate_network_key_zmq
 
 # Part 2: Create redis cluster
 mkdir -p kubernetes-manifests/generated
