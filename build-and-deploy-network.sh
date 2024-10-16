@@ -697,7 +697,7 @@ items:"
                   fi && if [ ! -e /var/lib/sawtooth/genesis.batch ]; then
                     sawadm genesis config-genesis.batch config.batch
                   fi &&
-                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_0_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public_key ${NETWORK_PUBLIC_KEY} --network_private_key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000"
+                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_0_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public-key ${NETWORK_PUBLIC_KEY} --network-private-key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000"
         else
             yaml_content+="
               env:
@@ -721,7 +721,7 @@ items:"
                     echo \$pbft${i}pub > /etc/sawtooth/keys/validator.pub
                   fi &&
                   sawtooth keygen my_key &&
-                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_${i}_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public_key ${NETWORK_PUBLIC_KEY} --network_private_key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000 $(for ((j=0; j<i; j++)); do echo -n "--peers tcp://\$SAWTOOTH_${j}_SERVICE_HOST:8800 "; done)"
+                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_${i}_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public-key ${NETWORK_PUBLIC_KEY} --network-private-key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000 $(for ((j=0; j<i; j++)); do echo -n "--peers tcp://\$SAWTOOTH_${j}_SERVICE_HOST:8800 "; done)"
         fi
 
         yaml_content+="
