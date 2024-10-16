@@ -24,6 +24,33 @@ check_node_exists() {
     return $?
 }
 
+generate_network_key_secret() {
+    local key_dir="kubernetes-manifests/generated/network_keys"
+    mkdir -p "$key_dir"
+
+    # Generate CURVE25519 key pair
+    private_key=$(openssl genpkey -algorithm X25519 -outform PEM | grep -v "BEGIN\|END")
+    public_key=$(echo "$private_key" | openssl pkey -pubout -outform PEM | grep -v "BEGIN\|END")
+
+    # Save keys to files (for reference, consider removing in production)
+    echo "$private_key" > "$key_dir/network_private.key"
+    echo "$public_key" > "$key_dir/network_public.key"
+
+    # Create a Kubernetes Secret YAML
+    cat << EOF > kubernetes-manifests/generated/network-key-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: network-key-secret
+type: Opaque
+stringData:
+  network_private_key: "${private_key}"
+  network_public_key: "${public_key}"
+EOF
+
+    echo "Network key Secret YAML has been created at kubernetes-manifests/generated/network-key-secret.yaml"
+}
+
 generate_ssl_certificates() {
     local num_nodes=$1
     local cert_dir="kubernetes-manifests/generated/certs"
@@ -608,6 +635,17 @@ items:"
 
             - name: sawtooth-validator
               image: hyperledger/sawtooth-validator:chime
+              env:
+                - name: NETWORK_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: network-key-secret
+                      key: network_private_key
+                - name: NETWORK_PUBLIC_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: network-key-secret
+                      key: network_public_key
               ports:
                 - name: tp
                   containerPort: 4004
@@ -650,7 +688,7 @@ items:"
                   fi && if [ ! -e /var/lib/sawtooth/genesis.batch ]; then
                     sawadm genesis config-genesis.batch config.batch
                   fi &&
-                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_0_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --scheduler parallel --peering static --maximum-peer-connectivity 10000"
+                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_0_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public_key ${NETWORK_PUBLIC_KEY} --network_private_key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000"
         else
             yaml_content+="
               env:
@@ -674,7 +712,7 @@ items:"
                     echo \$pbft${i}pub > /etc/sawtooth/keys/validator.pub
                   fi &&
                   sawtooth keygen my_key &&
-                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_${i}_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --scheduler parallel --peering static --maximum-peer-connectivity 10000 $(for ((j=0; j<i; j++)); do echo -n "--peers tcp://\$SAWTOOTH_${j}_SERVICE_HOST:8800 "; done)"
+                  sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_${i}_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --network-public_key ${NETWORK_PUBLIC_KEY} --network_private_key ${NETWORK_PRIVATE_KEY} --scheduler parallel --peering static --maximum-peer-connectivity 10000 $(for ((j=0; j<i; j++)); do echo -n "--peers tcp://\$SAWTOOTH_${j}_SERVICE_HOST:8800 "; done)"
         fi
 
         yaml_content+="
@@ -844,6 +882,7 @@ echo "All required nodes are present in the cluster."
 
 # Generate SSL/TLS certificates
 generate_ssl_certificates "$num_fog_nodes"
+generate_network_key_secret
 
 # Part 2: Create redis cluster
 mkdir -p kubernetes-manifests/generated
