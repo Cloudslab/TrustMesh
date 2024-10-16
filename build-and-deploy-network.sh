@@ -705,7 +705,6 @@ items:"
                   EOF
                   chown root:sawtooth /etc/sawtooth/validator.toml &&
                   chmod 640 /etc/sawtooth/validator.toml &&
-                  systemctl restart sawtooth-validator.service &&
                   sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_0_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --scheduler parallel --peering static --maximum-peer-connectivity 10000"
         else
             yaml_content+="
@@ -736,7 +735,6 @@ items:"
                   EOF
                   chown root:sawtooth /etc/sawtooth/validator.toml &&
                   chmod 640 /etc/sawtooth/validator.toml &&
-                  systemctl restart sawtooth-validator.service &&
                   sawtooth-validator -vv --endpoint tcp://\$SAWTOOTH_${i}_SERVICE_HOST:8800 --bind component:tcp://eth0:4004 --bind consensus:tcp://eth0:5050 --bind network:tcp://eth0:8800 --network-auth trust --scheduler parallel --peering static --maximum-peer-connectivity 10000 $(for ((j=0; j<i; j++)); do echo -n "--peers tcp://\$SAWTOOTH_${j}_SERVICE_HOST:8800 "; done)"
         fi
 
