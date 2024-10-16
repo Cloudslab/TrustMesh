@@ -56,6 +56,8 @@ EOF
 
     echo "Network key Secret YAML has been created at kubernetes-manifests/generated/network-key-secret.yaml"
 
+    kubectl apply -f kubernetes-manifests/generated/network-key-secret.yaml
+
     # Clean up
     rm curve_keygen curve_keygen.cpp
 }
