@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -32,6 +33,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     def __init__(self):
         self.redis = None
         self._initialize_redis()
+        self.loop = asyncio.get_event_loop()
 
     @property
     def family_name(self):
@@ -107,9 +109,9 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             action = payload['action']
 
             if action == 'request_schedule':
-                self._handle_schedule_request(payload, context)
+                self.loop.run_until_complete(self._handle_schedule_request(payload, context))
             elif action == 'submit_schedule_hash':
-                self._handle_schedule_hash(payload, context)
+                self.loop.run_until_complete(self._handle_schedule_hash(payload, context))
             else:
                 raise InvalidTransaction(f"Invalid action: {action}")
 
@@ -121,15 +123,15 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             logger.error(f"Unexpected error in apply method: {str(e)}")
             raise InvalidTransaction(str(e))
 
-    def _handle_schedule_request(self, payload, context):
+    async def _handle_schedule_request(self, payload, context):
         workflow_id = payload['workflow_id']
         schedule_id = payload['schedule_id']
 
-        if not self._validate_workflow_id(context, workflow_id):
+        if not await self._validate_workflow_id(context, workflow_id):
             raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
         # Deterministically select a scheduler
-        scheduler_node = self._select_scheduler()
+        scheduler_node = await self._select_scheduler()
 
         schedule_address = self._make_schedule_address(schedule_id)
         schedule_data = {
@@ -139,18 +141,18 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             'assigned_scheduler': scheduler_node
         }
 
-        context.set_state({
+        await context.set_state({
             schedule_address: json.dumps(schedule_data).encode()
         })
 
         logger.info(f"Schedule request {schedule_id} assigned to node {scheduler_node}")
 
-    def _handle_schedule_hash(self, payload, context):
+    async def _handle_schedule_hash(self, payload, context):
         schedule_id = payload['schedule_id']
         schedule_hash = payload['schedule_hash']
 
         schedule_address = self._make_schedule_address(schedule_id)
-        state_entries = context.get_state([schedule_address])
+        state_entries = await context.get_state([schedule_address])
         if state_entries:
             schedule_data = json.loads(state_entries[0].data.decode())
             if schedule_data['status'] != 'PENDING':
@@ -159,7 +161,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             schedule_data['status'] = 'COMPLETED'
             schedule_data['schedule_hash'] = schedule_hash
 
-            context.set_state({
+            await context.set_state({
                 schedule_address: json.dumps(schedule_data).encode()
             })
 
@@ -167,17 +169,18 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         else:
             raise InvalidTransaction(f"No pending schedule found for ID: {schedule_id}")
 
-    def _validate_workflow_id(self, context, workflow_id):
+    async def _validate_workflow_id(self, context, workflow_id):
         address = self._make_workflow_address(workflow_id)
-        state_entries = context.get_state([address])
+        state_entries = await context.get_state([address])
         return len(state_entries) > 0
 
-    def _select_scheduler(self):
+    async def _select_scheduler(self):
+
         try:
             node_resources = []
-            for key in self.redis.scan_iter(match='resources_*'):
+            async for key in self.redis.scan_iter(match='resources_*'):
                 node_id = key.split('_', 1)[1]
-                redis_data = self.redis.get(key)
+                redis_data = await self.redis.get(key)
                 if redis_data:
                     resource_data = json.loads(redis_data)
                     node_resources.append({
@@ -196,7 +199,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     def _calculate_available_resources(resources):
         cpu_available = resources['cpu']['total'] * (1 - resources['cpu']['used_percent'] / 100)
         memory_available = resources['memory']['total'] * (1 - resources['memory']['used_percent'] / 100)
-        return cpu_available + memory_available
+        return cpu_available + memory_available  # Simple sum, could be weighted if needed
 
     @staticmethod
     def _make_schedule_address(schedule_id):
