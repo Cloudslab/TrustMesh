@@ -6,6 +6,7 @@ import os
 import ssl
 import tempfile
 import time
+from concurrent.futures import Future as ConcurrentFuture
 from sawtooth_sdk.messaging.stream import Stream
 from sawtooth_sdk.protobuf.client_state_pb2 import ClientStateGetRequest, ClientStateGetResponse
 from sawtooth_sdk.protobuf.events_pb2 import EventSubscription, EventFilter, EventList
@@ -35,7 +36,6 @@ REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
 PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/root.priv')
 
 logger = logging.getLogger(__name__)
-
 
 class ScheduleGenerator:
     def __init__(self, validator_url):
@@ -124,8 +124,18 @@ class ScheduleGenerator:
                     await self.handle_event(event)
 
     async def receive_message(self):
-        future = self.stream.receive()
-        return await asyncio.wrap_future(future)
+        concurrent_future = ConcurrentFuture()
+
+        def set_result(sawtooth_future):
+            if sawtooth_future.result is not None:
+                concurrent_future.set_result(sawtooth_future.result)
+            else:
+                concurrent_future.set_exception(sawtooth_future.exception)
+
+        sawtooth_future = self.stream.receive()
+        sawtooth_future.add_callback(set_result)
+
+        return await asyncio.wrap_future(concurrent_future)
 
     async def subscribe_to_events(self):
         block_commit_subscription = EventSubscription(
@@ -144,11 +154,21 @@ class ScheduleGenerator:
             subscriptions=[block_commit_subscription, state_delta_subscription]
         )
 
-        response_future = self.stream.send(
+        concurrent_future = ConcurrentFuture()
+
+        def set_result(sawtooth_future):
+            if sawtooth_future.result is not None:
+                concurrent_future.set_result(sawtooth_future.result)
+            else:
+                concurrent_future.set_exception(sawtooth_future.exception)
+
+        sawtooth_future = self.stream.send(
             message_type=Message.CLIENT_EVENTS_SUBSCRIBE_REQUEST,
             content=request.SerializeToString()
         )
-        response = await asyncio.wrap_future(response_future)
+        sawtooth_future.add_callback(set_result)
+
+        response = await asyncio.wrap_future(concurrent_future)
 
         response_proto = ClientEventsSubscribeResponse()
         response_proto.ParseFromString(response.content)
@@ -186,10 +206,8 @@ class ScheduleGenerator:
 
             await self.store_schedule_in_redis(schedule_id, schedule_result, workflow_id)
 
-            # Calculate schedule hash
             schedule_hash = hashlib.sha256(json.dumps(schedule_result, sort_keys=True).encode()).hexdigest()
 
-            # Submit schedule hash to blockchain
             result = await self.submit_schedule_hash(schedule_id, schedule_hash)
 
             logger.info(f"Generated and stored schedule for {schedule_id}, hash submitted to blockchain: {result}")
@@ -223,14 +241,24 @@ class ScheduleGenerator:
 
     async def get_state(self, address):
         request = ClientStateGetRequest(
-            state_root='',  # Leave empty to use the current state
+            state_root='',
             address=address
         )
-        future = self.stream.send(
+        concurrent_future = ConcurrentFuture()
+
+        def set_result(sawtooth_future):
+            if sawtooth_future.result is not None:
+                concurrent_future.set_result(sawtooth_future.result)
+            else:
+                concurrent_future.set_exception(sawtooth_future.exception)
+
+        sawtooth_future = self.stream.send(
             message_type=Message.CLIENT_STATE_GET_REQUEST,
             content=request.SerializeToString()
         )
-        response = await asyncio.wrap_future(future)
+        sawtooth_future.add_callback(set_result)
+
+        response = await asyncio.wrap_future(concurrent_future)
 
         response_proto = ClientStateGetResponse()
         response_proto.ParseFromString(response.content)
@@ -301,11 +329,21 @@ class ScheduleGenerator:
 
     async def submit_batch(self, batch):
         batch_list = BatchList(batches=[batch])
-        future = self.stream.send(
+        concurrent_future = ConcurrentFuture()
+
+        def set_result(sawtooth_future):
+            if sawtooth_future.result is not None:
+                concurrent_future.set_result(sawtooth_future.result)
+            else:
+                concurrent_future.set_exception(sawtooth_future.exception)
+
+        sawtooth_future = self.stream.send(
             message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
             content=batch_list.SerializeToString()
         )
-        response = await asyncio.wrap_future(future)
+        sawtooth_future.add_callback(set_result)
+
+        response = await asyncio.wrap_future(concurrent_future)
         return self.process_future_result(response)
 
     @staticmethod
