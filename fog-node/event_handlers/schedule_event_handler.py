@@ -112,32 +112,21 @@ class ScheduleGenerator:
                 except Exception as e:
                     logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
 
-    async def start(self):
-        await self.subscribe_to_events()
+    def start(self):
+        self.subscribe_to_events()
 
         while True:
-            msg = await self.receive_message()
+            msg = self.receive_message()
             if msg and msg.message_type == Message.CLIENT_EVENTS:
                 event_list = EventList()
                 event_list.ParseFromString(msg.content)
                 for event in event_list.events:
-                    await self.handle_event(event)
+                    self.handle_event(event)
 
-    async def receive_message(self):
-        concurrent_future = ConcurrentFuture()
+    def receive_message(self):
+        return self.stream.receive().result()
 
-        def set_result(sawtooth_future):
-            if sawtooth_future.result is not None:
-                concurrent_future.set_result(sawtooth_future.result)
-            else:
-                concurrent_future.set_exception(sawtooth_future.exception)
-
-        sawtooth_future = self.stream.receive()
-        sawtooth_future.add_callback(set_result)
-
-        return await asyncio.wrap_future(concurrent_future)
-
-    async def subscribe_to_events(self):
+    def subscribe_to_events(self):
         block_commit_subscription = EventSubscription(
             event_type="sawtooth/block-commit"
         )
@@ -154,21 +143,10 @@ class ScheduleGenerator:
             subscriptions=[block_commit_subscription, state_delta_subscription]
         )
 
-        concurrent_future = ConcurrentFuture()
-
-        def set_result(sawtooth_future):
-            if sawtooth_future.result is not None:
-                concurrent_future.set_result(sawtooth_future.result)
-            else:
-                concurrent_future.set_exception(sawtooth_future.exception)
-
-        sawtooth_future = self.stream.send(
+        response = self.stream.send(
             message_type=Message.CLIENT_EVENTS_SUBSCRIBE_REQUEST,
             content=request.SerializeToString()
-        )
-        sawtooth_future.add_callback(set_result)
-
-        response = await asyncio.wrap_future(concurrent_future)
+        ).result()
 
         response_proto = ClientEventsSubscribeResponse()
         response_proto.ParseFromString(response.content)
@@ -178,56 +156,56 @@ class ScheduleGenerator:
 
         logger.info("Successfully subscribed to events")
 
-    async def handle_event(self, event):
+    def handle_event(self, event):
         if event.event_type == "sawtooth/state-delta":
-            await self.handle_state_delta(event)
+            self.handle_state_delta(event)
         elif event.event_type == "sawtooth/block-commit":
             logger.info("New block committed")
         else:
             logger.info(f"Received unhandled event type: {event.event_type}")
 
-    async def handle_state_delta(self, event):
+    def handle_state_delta(self, event):
         for state_change in event.state_changes:
             if state_change.address.startswith(SCHEDULE_NAMESPACE):
                 schedule_data = json.loads(state_change.value)
                 if schedule_data['status'] == 'PENDING' and schedule_data['assigned_scheduler'] == self.node_id:
-                    await self.generate_schedule(schedule_data)
+                    self.generate_schedule(schedule_data)
 
-    async def generate_schedule(self, schedule_data):
+    def generate_schedule(self, schedule_data):
         try:
             workflow_id = schedule_data['workflow_id']
             schedule_id = schedule_data['schedule_id']
 
-            dependency_graph = await self.get_dependency_graph(workflow_id)
-            app_requirements = await self.get_app_requirements(dependency_graph['nodes'])
+            dependency_graph = self.get_dependency_graph(workflow_id)
+            app_requirements = self.get_app_requirements(dependency_graph['nodes'])
 
             scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": self.redis})
-            schedule_result = await scheduler.schedule()
+            schedule_result = scheduler.schedule()
 
-            await self.store_schedule_in_redis(schedule_id, schedule_result, workflow_id)
+            self.store_schedule_in_redis(schedule_id, schedule_result, workflow_id)
 
             schedule_hash = hashlib.sha256(json.dumps(schedule_result, sort_keys=True).encode()).hexdigest()
 
-            result = await self.submit_schedule_hash(schedule_id, schedule_hash)
+            result = self.submit_schedule_hash(schedule_id, schedule_hash)
 
             logger.info(f"Generated and stored schedule for {schedule_id}, hash submitted to blockchain: {result}")
         except Exception as e:
             logger.error(f"Error generating schedule: {str(e)}")
 
-    async def get_dependency_graph(self, workflow_id):
+    def get_dependency_graph(self, workflow_id):
         address = WORKFLOW_NAMESPACE + hashlib.sha512(workflow_id.encode()).hexdigest()[:64]
-        state_entry = await self.get_state(address)
+        state_entry = self.get_state(address)
         if state_entry:
             workflow_data = json.loads(state_entry)
             return workflow_data['dependency_graph']
         else:
             raise Exception(f"No workflow data found for workflow ID: {workflow_id}")
 
-    async def get_app_requirements(self, app_ids):
+    def get_app_requirements(self, app_ids):
         app_requirements = {}
         for app_id in app_ids:
             address = DOCKER_IMAGE_NAMESPACE + hashlib.sha512(app_id.encode()).hexdigest()[:64]
-            state_entry = await self.get_state(address)
+            state_entry = self.get_state(address)
             if state_entry:
                 app_data = json.loads(state_entry)
                 app_requirements[app_id] = {
@@ -239,26 +217,15 @@ class ScheduleGenerator:
                 raise Exception(f"No requirements found for app ID: {app_id}")
         return app_requirements
 
-    async def get_state(self, address):
+    def get_state(self, address):
         request = ClientStateGetRequest(
             state_root='',
             address=address
         )
-        concurrent_future = ConcurrentFuture()
-
-        def set_result(sawtooth_future):
-            if sawtooth_future.result is not None:
-                concurrent_future.set_result(sawtooth_future.result)
-            else:
-                concurrent_future.set_exception(sawtooth_future.exception)
-
-        sawtooth_future = self.stream.send(
+        response = self.stream.send(
             message_type=Message.CLIENT_STATE_GET_REQUEST,
             content=request.SerializeToString()
-        )
-        sawtooth_future.add_callback(set_result)
-
-        response = await asyncio.wrap_future(concurrent_future)
+        ).result()
 
         response_proto = ClientStateGetResponse()
         response_proto.ParseFromString(response.content)
@@ -268,7 +235,7 @@ class ScheduleGenerator:
         else:
             return None
 
-    async def store_schedule_in_redis(self, schedule_id, schedule_result, workflow_id):
+    def store_schedule_in_redis(self, schedule_id, schedule_result, workflow_id):
         schedule_data = {
             'schedule_id': schedule_id,
             'schedule': schedule_result,
@@ -278,10 +245,10 @@ class ScheduleGenerator:
         schedule_json = json.dumps(schedule_data)
         key = f"schedule_{schedule_id}"
 
-        await self.redis.set(key, schedule_json)
-        await self.redis.publish("schedule", schedule_json)
+        self.redis.set(key, schedule_json)
+        self.redis.publish("schedule", schedule_json)
 
-    async def submit_schedule_hash(self, schedule_id, schedule_hash):
+    def submit_schedule_hash(self, schedule_id, schedule_hash):
         payload = json.dumps({
             'action': 'submit_schedule_hash',
             'schedule_id': schedule_id,
@@ -290,7 +257,7 @@ class ScheduleGenerator:
 
         transaction = self.create_transaction(payload)
         batch = self.create_batch([transaction])
-        return await self.submit_batch(batch)
+        return self.submit_batch(batch)
 
     def create_transaction(self, payload):
         header = TransactionHeader(
@@ -327,23 +294,12 @@ class ScheduleGenerator:
             header_signature=signature
         )
 
-    async def submit_batch(self, batch):
+    def submit_batch(self, batch):
         batch_list = BatchList(batches=[batch])
-        concurrent_future = ConcurrentFuture()
-
-        def set_result(sawtooth_future):
-            if sawtooth_future.result is not None:
-                concurrent_future.set_result(sawtooth_future.result)
-            else:
-                concurrent_future.set_exception(sawtooth_future.exception)
-
-        sawtooth_future = self.stream.send(
+        response = self.stream.send(
             message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
             content=batch_list.SerializeToString()
-        )
-        sawtooth_future.add_callback(set_result)
-
-        response = await asyncio.wrap_future(concurrent_future)
+        ).result()
         return self.process_future_result(response)
 
     @staticmethod
@@ -373,7 +329,7 @@ class ScheduleGenerator:
 def main():
     validator_url = os.getenv('VALIDATOR_URL', 'tcp://validator:4004')
     generator = ScheduleGenerator(validator_url)
-    asyncio.run(generator.start())
+    generator.start()
 
 
 if __name__ == '__main__':
