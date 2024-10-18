@@ -109,9 +109,9 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             action = payload['action']
 
             if action == 'request_schedule':
-                self.loop.run_until_complete(self._handle_schedule_request(payload, context))
+                asyncio.run_coroutine_threadsafe(self._handle_schedule_request(payload, context), self.loop).result()
             elif action == 'submit_schedule_hash':
-                self.loop.run_until_complete(self._handle_schedule_hash(payload, context))
+                asyncio.run_coroutine_threadsafe(self._handle_schedule_hash(payload, context), self.loop).result()
             else:
                 raise InvalidTransaction(f"Invalid action: {action}")
 
