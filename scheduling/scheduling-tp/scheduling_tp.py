@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import json
 import logging
@@ -33,7 +32,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     def __init__(self):
         self.redis = None
         self._initialize_redis()
-        self.loop = asyncio.get_event_loop()
 
     @property
     def family_name(self):
@@ -109,9 +107,9 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             action = payload['action']
 
             if action == 'request_schedule':
-                asyncio.run_coroutine_threadsafe(self._handle_schedule_request(payload, context), self.loop).result()
+                self._handle_schedule_request(payload, context)
             elif action == 'submit_schedule_hash':
-                asyncio.run_coroutine_threadsafe(self._handle_schedule_hash(payload, context), self.loop).result()
+                self._handle_schedule_hash(payload, context)
             else:
                 raise InvalidTransaction(f"Invalid action: {action}")
 
@@ -123,15 +121,15 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             logger.error(f"Unexpected error in apply method: {str(e)}")
             raise InvalidTransaction(str(e))
 
-    async def _handle_schedule_request(self, payload, context):
+    def _handle_schedule_request(self, payload, context):
         workflow_id = payload['workflow_id']
         schedule_id = payload['schedule_id']
 
-        if not await self._validate_workflow_id(context, workflow_id):
+        if not self._validate_workflow_id(context, workflow_id):
             raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
         # Deterministically select a scheduler
-        scheduler_node = await self._select_scheduler()
+        scheduler_node = self._select_scheduler()
 
         schedule_address = self._make_schedule_address(schedule_id)
         schedule_data = {
@@ -141,18 +139,18 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             'assigned_scheduler': scheduler_node
         }
 
-        await context.set_state({
+        context.set_state({
             schedule_address: json.dumps(schedule_data).encode()
         })
 
         logger.info(f"Schedule request {schedule_id} assigned to node {scheduler_node}")
 
-    async def _handle_schedule_hash(self, payload, context):
+    def _handle_schedule_hash(self, payload, context):
         schedule_id = payload['schedule_id']
         schedule_hash = payload['schedule_hash']
 
         schedule_address = self._make_schedule_address(schedule_id)
-        state_entries = await context.get_state([schedule_address])
+        state_entries = context.get_state([schedule_address])
         if state_entries:
             schedule_data = json.loads(state_entries[0].data.decode())
             if schedule_data['status'] != 'PENDING':
@@ -161,7 +159,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             schedule_data['status'] = 'COMPLETED'
             schedule_data['schedule_hash'] = schedule_hash
 
-            await context.set_state({
+            context.set_state({
                 schedule_address: json.dumps(schedule_data).encode()
             })
 
@@ -169,18 +167,17 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         else:
             raise InvalidTransaction(f"No pending schedule found for ID: {schedule_id}")
 
-    async def _validate_workflow_id(self, context, workflow_id):
+    def _validate_workflow_id(self, context, workflow_id):
         address = self._make_workflow_address(workflow_id)
-        state_entries = await context.get_state([address])
+        state_entries = context.get_state([address])
         return len(state_entries) > 0
 
-    async def _select_scheduler(self):
-
+    def _select_scheduler(self):
         try:
             node_resources = []
-            async for key in self.redis.scan_iter(match='resources_*'):
+            for key in self.redis.scan_iter(match='resources_*'):
                 node_id = key.split('_', 1)[1]
-                redis_data = await self.redis.get(key)
+                redis_data = self.redis.get(key)
                 if redis_data:
                     resource_data = json.loads(redis_data)
                     node_resources.append({
