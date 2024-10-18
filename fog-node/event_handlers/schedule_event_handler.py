@@ -7,6 +7,7 @@ import ssl
 import tempfile
 import time
 from sawtooth_sdk.messaging.stream import Stream
+from sawtooth_sdk.protobuf.client_state_pb2 import ClientStateGetRequest, ClientStateGetResponse
 from sawtooth_sdk.protobuf.events_pb2 import EventSubscription, EventFilter, EventList
 from sawtooth_sdk.protobuf.client_event_pb2 import ClientEventsSubscribeRequest, ClientEventsSubscribeResponse
 from sawtooth_sdk.protobuf.validator_pb2 import Message
@@ -112,16 +113,19 @@ class ScheduleGenerator:
                     logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
 
     async def start(self):
-        await self.stream.connect()
         await self.subscribe_to_events()
 
         while True:
-            msg = await self.stream.receive()
-            if msg.message_type == Message.CLIENT_EVENTS:
+            msg = await self.receive_message()
+            if msg and msg.message_type == Message.CLIENT_EVENTS:
                 event_list = EventList()
                 event_list.ParseFromString(msg.content)
                 for event in event_list.events:
                     await self.handle_event(event)
+
+    async def receive_message(self):
+        future = self.stream.receive()
+        return await asyncio.wrap_future(future)
 
     async def subscribe_to_events(self):
         block_commit_subscription = EventSubscription(
@@ -140,15 +144,17 @@ class ScheduleGenerator:
             subscriptions=[block_commit_subscription, state_delta_subscription]
         )
 
-        response = await self.stream.send(
+        response_future = self.stream.send(
             message_type=Message.CLIENT_EVENTS_SUBSCRIBE_REQUEST,
             content=request.SerializeToString()
         )
-        response = ClientEventsSubscribeResponse()
-        response.ParseFromString(response)
+        response = await asyncio.wrap_future(response_future)
 
-        if response.status != ClientEventsSubscribeResponse.OK:
-            raise Exception(f"Failed to subscribe to events: {response.response_message}")
+        response_proto = ClientEventsSubscribeResponse()
+        response_proto.ParseFromString(response.content)
+
+        if response_proto.status != ClientEventsSubscribeResponse.OK:
+            raise Exception(f"Failed to subscribe to events: {response_proto.response_message}")
 
         logger.info("Successfully subscribed to events")
 
@@ -161,16 +167,17 @@ class ScheduleGenerator:
             logger.info(f"Received unhandled event type: {event.event_type}")
 
     async def handle_state_delta(self, event):
-        for state_change in event.data:
+        for state_change in event.state_changes:
             if state_change.address.startswith(SCHEDULE_NAMESPACE):
                 schedule_data = json.loads(state_change.value)
                 if schedule_data['status'] == 'PENDING' and schedule_data['assigned_scheduler'] == self.node_id:
                     await self.generate_schedule(schedule_data)
 
     async def generate_schedule(self, schedule_data):
-        workflow_id = schedule_data['workflow_id']
-        schedule_id = schedule_data['schedule_id']
         try:
+            workflow_id = schedule_data['workflow_id']
+            schedule_id = schedule_data['schedule_id']
+
             dependency_graph = await self.get_dependency_graph(workflow_id)
             app_requirements = await self.get_app_requirements(dependency_graph['nodes'])
 
@@ -188,13 +195,12 @@ class ScheduleGenerator:
             logger.info(f"Generated and stored schedule for {schedule_id}, hash submitted to blockchain: {result}")
         except Exception as e:
             logger.error(f"Error generating schedule: {str(e)}")
-            await self.update_schedule_status(schedule_id, 'FAILED')
 
     async def get_dependency_graph(self, workflow_id):
         address = WORKFLOW_NAMESPACE + hashlib.sha512(workflow_id.encode()).hexdigest()[:64]
-        state_entry = await self.stream.get_state([address])
+        state_entry = await self.get_state(address)
         if state_entry:
-            workflow_data = json.loads(state_entry[0].data)
+            workflow_data = json.loads(state_entry)
             return workflow_data['dependency_graph']
         else:
             raise Exception(f"No workflow data found for workflow ID: {workflow_id}")
@@ -203,9 +209,9 @@ class ScheduleGenerator:
         app_requirements = {}
         for app_id in app_ids:
             address = DOCKER_IMAGE_NAMESPACE + hashlib.sha512(app_id.encode()).hexdigest()[:64]
-            state_entry = await self.stream.get_state([address])
+            state_entry = await self.get_state(address)
             if state_entry:
-                app_data = json.loads(state_entry[0].data)
+                app_data = json.loads(state_entry)
                 app_requirements[app_id] = {
                     "memory": app_data["resource_requirements"]["memory"],
                     "cpu": app_data["resource_requirements"]["cpu"],
@@ -214,6 +220,25 @@ class ScheduleGenerator:
             else:
                 raise Exception(f"No requirements found for app ID: {app_id}")
         return app_requirements
+
+    async def get_state(self, address):
+        request = ClientStateGetRequest(
+            state_root='',  # Leave empty to use the current state
+            address=address
+        )
+        future = self.stream.send(
+            message_type=Message.CLIENT_STATE_GET_REQUEST,
+            content=request.SerializeToString()
+        )
+        response = await asyncio.wrap_future(future)
+
+        response_proto = ClientStateGetResponse()
+        response_proto.ParseFromString(response.content)
+
+        if response_proto.status == ClientStateGetResponse.OK:
+            return response_proto.value
+        else:
+            return None
 
     async def store_schedule_in_redis(self, schedule_id, schedule_result, workflow_id):
         schedule_data = {
@@ -276,50 +301,35 @@ class ScheduleGenerator:
 
     async def submit_batch(self, batch):
         batch_list = BatchList(batches=[batch])
-        future = await self.stream.send(
-            message_type='CLIENT_BATCH_SUBMIT_REQUEST',
+        future = self.stream.send(
+            message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
             content=batch_list.SerializeToString()
         )
-        return self.process_future_result(future)
+        response = await asyncio.wrap_future(future)
+        return self.process_future_result(response)
 
     @staticmethod
     def process_future_result(future_result):
-        try:
-            result = future_result.result()
-            response = ClientBatchSubmitResponse()
-            response.ParseFromString(result.content)
+        response = ClientBatchSubmitResponse()
+        response.ParseFromString(future_result.content)
 
-            if response.status == ClientBatchSubmitResponse.OK:
-                return {
-                    "status": "SUCCESS",
-                    "message": "Batch submitted successfully"
-                }
-            elif response.status == ClientBatchSubmitResponse.INVALID_BATCH:
-                return {
-                    "status": "FAILURE",
-                    "message": "Invalid batch submitted",
-                    "error_details": response.error_message
-                }
-            else:
-                return {
-                    "status": "FAILURE",
-                    "message": f"Batch submission failed with status: {response.status}",
-                    "error_details": response.error_message
-                }
-        except Exception as e:
+        if response.status == ClientBatchSubmitResponse.OK:
             return {
-                "status": "ERROR",
-                "message": "An error occurred while processing the submission result",
-                "error_details": str(e)
+                "status": "SUCCESS",
+                "message": "Batch submitted successfully"
             }
-
-    async def update_schedule_status(self, schedule_id, status):
-        address = SCHEDULE_NAMESPACE + hashlib.sha512(schedule_id.encode()).hexdigest()[:64]
-        state_entry = await self.stream.get_state([address])
-        if state_entry:
-            schedule_data = json.loads(state_entry[0].data)
-            schedule_data['status'] = status
-            await self.stream.set_state({address: json.dumps(schedule_data).encode()})
+        elif response.status == ClientBatchSubmitResponse.INVALID_BATCH:
+            return {
+                "status": "FAILURE",
+                "message": "Invalid batch submitted",
+                "error_details": response.error_message
+            }
+        else:
+            return {
+                "status": "FAILURE",
+                "message": f"Batch submission failed with status: {response.status}",
+                "error_details": response.error_message
+            }
 
 
 def main():
