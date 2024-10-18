@@ -104,15 +104,16 @@ class TransactionCreator:
             schedule_id = str(uuid.uuid4())
             timestamp = int(time.time())
 
-            # Create iot-schedule transaction
             schedule_payload = {
+                "action": "request_schedule",
                 "workflow_id": workflow_id,
                 "schedule_id": schedule_id,
                 "source_url": f"{IOT_URL}:{iot_port}",
                 "source_public_key": iot_public_key,
                 "timestamp": timestamp
             }
-            schedule_inputs = [SCHEDULE_NAMESPACE, WORKFLOW_NAMESPACE, DOCKER_IMAGE_NAMESPACE]
+
+            schedule_inputs = [SCHEDULE_NAMESPACE, WORKFLOW_NAMESPACE]
             schedule_outputs = [SCHEDULE_NAMESPACE]
             schedule_txn = create_transaction(self.signer, SCHEDULE_FAMILY_NAME, SCHEDULE_FAMILY_VERSION,
                                               schedule_payload, schedule_inputs, schedule_outputs)

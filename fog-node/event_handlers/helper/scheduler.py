@@ -57,7 +57,7 @@ class LCDWRRScheduler(BaseScheduler):
     def calculate_available_resources(node: Dict) -> Dict[str, float]:
         cpu_available = node['resource_data']['cpu']['total'] * (1 - node['resource_data']['cpu']['used_percent'] / 100)
         memory_available = node['resource_data']['memory']['total'] * (
-                    1 - node['resource_data']['memory']['used_percent'] / 100)
+                1 - node['resource_data']['memory']['used_percent'] / 100)
         return {
             'cpu': cpu_available,
             'memory': memory_available

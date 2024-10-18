@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV SAWTOOTH_PRIVATE_KEY /root/.sawtooth/keys/client.priv
 
 # Copy the event handler scripts
-COPY event_handlers/* ./event_handlers/
+COPY event_handlers ./event_handlers
 
 # Copy scheduler scripts
 COPY scheduled/* ./scheduled/
