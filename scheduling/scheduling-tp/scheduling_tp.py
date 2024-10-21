@@ -145,7 +145,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
         logger.info("Selecting scheduler")
-        scheduler_node = self._select_scheduler()
+        scheduler_node = self.loop.run_until_complete(self._select_scheduler())
         logger.info(f"Selected scheduler node: {scheduler_node}")
 
         schedule_address = self._make_schedule_address(schedule_id)
@@ -199,7 +199,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         logger.info(f"Workflow ID {workflow_id} is valid: {is_valid}")
         return is_valid
 
-    def _select_scheduler(self):
+    async def _select_scheduler(self):
         logger.info("Entering _select_scheduler method")
         try:
             if self.redis is None:
@@ -208,12 +208,10 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
             node_resources = []
             logger.info("Scanning Redis for resource data")
-            keys = self.loop.run_until_complete(self.redis.scan(match='resources_*'))
-            logger.debug(f"Found keys: {keys}")
-            for key in keys[1]:  # keys[1] contains the matched keys
+            async for key in self.redis.scan(match='resources_*'):
                 node_id = key.split('_', 1)[1]
                 logger.debug(f"Fetching data for node: {node_id}")
-                redis_data = self.loop.run_until_complete(self.redis.get(key))
+                redis_data = await self.redis.get(key)
                 if redis_data:
                     resource_data = json.loads(redis_data)
                     logger.debug(f"Resource data for node {node_id}: {resource_data}")
