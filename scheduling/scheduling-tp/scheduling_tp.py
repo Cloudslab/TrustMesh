@@ -208,7 +208,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
             node_resources = []
             logger.info("Scanning Redis for resource data")
-            async for key in self.redis.scan(match='resources_*'):
+            async for key in self.redis.scan_iter(match='resources_*'):
                 node_id = key.split('_', 1)[1]
                 logger.debug(f"Fetching data for node: {node_id}")
                 redis_data = await self.redis.get(key)
