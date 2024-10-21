@@ -91,6 +91,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
                 ssl_context=ssl_context,
                 decode_responses=True
             )
+
+            self.loop.run_until_complete(self.redis.ping())
             logger.info("Connected to Redis cluster successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
