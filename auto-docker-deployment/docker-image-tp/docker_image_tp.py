@@ -50,7 +50,7 @@ class DockerImageTransactionHandler(TransactionHandler):
                 attributes=[("image_hash", payload.get('image_hash')),
                             ("image_name", payload.get('image_name')),
                             ("app_id", payload.get('app_id')),
-                            ("action", payload.get('action')),]
+                            ("action", payload.get('action')), ]
             )
             logger.info(f"Emitted event for action: {payload.get('action')}, image: {payload.get('image_name')}, "
                         f"hash: {payload.get('image_hash')}, app_id: {payload.get('app_id')}")
@@ -61,8 +61,8 @@ class DockerImageTransactionHandler(TransactionHandler):
             logger.error(f"Error processing transaction: {str(e)}")
             raise InvalidTransaction(str(e))
 
-
-    def validate_resource_requirements(self, resource_requirements):
+    @staticmethod
+    def validate_resource_requirements(resource_requirements):
         if resource_requirements is None:
             return
 
@@ -73,7 +73,8 @@ class DockerImageTransactionHandler(TransactionHandler):
 
         # Check if only the required fields are present
         if set(resource_requirements.keys()) != set(required_fields):
-            raise InvalidTransaction(f"resource_requirements must contain only these fields: {', '.join(required_fields)}")
+            raise InvalidTransaction(
+                f"resource_requirements must contain only these fields: {', '.join(required_fields)}")
 
         # Validate each field
         for field in required_fields:

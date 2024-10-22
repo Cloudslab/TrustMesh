@@ -118,9 +118,9 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             if action == 'request_schedule':
                 logger.info("Handling schedule request")
                 self._handle_schedule_request(payload, context)
-            elif action == 'submit_schedule_hash':
-                logger.info("Handling schedule hash submission")
-                self._handle_schedule_hash(payload, context)
+            elif action == 'submit_schedule':
+                logger.info("Handling schedule submission")
+                self._handle_schedule(payload, context)
             else:
                 logger.error(f"Invalid action: {action}")
                 raise InvalidTransaction(f"Invalid action: {action}")
@@ -165,23 +165,28 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
         logger.info(f"Schedule request {schedule_id} assigned to node {scheduler_node}")
 
-    def _handle_schedule_hash(self, payload, context):
+        # Emit an event
+        context.add_event(
+            event_type="schedule-request",
+            attributes=[("workflow_id", workflow_id),
+                        ("schedule_id", schedule_id),
+                        ("assigned_scheduler", scheduler_node)]
+        )
+        logger.info(f"Emitted event for schedule request. workflow_id: {workflow_id}, "
+                    f"schedule_id: {schedule_id}, assigned_scheduler: {scheduler_node}")
+
+    def _handle_schedule(self, payload, context):
         logger.info("Entering _handle_schedule_hash method")
         schedule_id = payload['schedule_id']
-        schedule_hash = payload['schedule_hash']
-        logger.info(f"Schedule ID: {schedule_id}, Hash: {schedule_hash}")
+        schedule = payload['schedule']
+        logger.info(f"Schedule ID: {schedule_id}, Schedule: {schedule}")
 
         schedule_address = self._make_schedule_address(schedule_id)
         state_entries = context.get_state([schedule_address])
         if state_entries:
             schedule_data = json.loads(state_entries[0].data.decode())
             logger.info(f"Current schedule data: {schedule_data}")
-            if schedule_data['status'] != 'PENDING':
-                logger.error(f"Invalid schedule status for hash submission: {schedule_data['status']}")
-                raise InvalidTransaction(f"Invalid schedule status for hash submission: {schedule_data['status']}")
-
-            schedule_data['status'] = 'COMPLETED'
-            schedule_data['schedule_hash'] = schedule_hash
+            schedule_data['schedule'] = schedule
 
             logger.info(f"Updating state for schedule {schedule_id}")
             context.set_state({

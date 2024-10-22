@@ -194,7 +194,7 @@ def main():
         logger.error(f"Subscription failed: {response.response_message}")
         return
 
-    logger.info("Subscription successful. Listening for events...")
+    logger.info("Docker Image Handler: Subscription successful. Listening for events...")
 
     while True:
         try:
