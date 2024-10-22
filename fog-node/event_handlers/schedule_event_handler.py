@@ -232,6 +232,7 @@ def get_state(address):
 
 
 def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
+    logger.info(f"Publishing Schedule: {schedule_id} to redis")
     schedule_data = {
         'schedule_id': schedule_id,
         'schedule': schedule_result,
@@ -241,8 +242,8 @@ def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
     schedule_json = json.dumps(schedule_data)
     key = f"schedule_{schedule_id}"
 
-    redis.set(key, schedule_json)
-    redis.publish("schedule", schedule_json)
+    asyncio.get_event_loop().run_until_complete(redis.publish("schedule", schedule_json))
+    asyncio.get_event_loop().run_until_complete(redis.set(key, schedule_json))
 
 
 def submit_schedule(schedule_id, schedule, workflow_id):
