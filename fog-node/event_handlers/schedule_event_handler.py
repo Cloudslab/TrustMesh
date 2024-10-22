@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -48,7 +49,7 @@ def load_private_key():
         raise IOError(f"Failed to load private key from {PRIVATE_KEY_FILE}: {str(e)}") from e
 
 
-def initialize_redis():
+async def initialize_redis():
     logger.info("Starting Redis initialization")
     temp_files = []
     try:
@@ -84,7 +85,7 @@ def initialize_redis():
 
         logger.info(f"Attempting to connect to Redis cluster at {REDIS_HOST}:{REDIS_PORT}")
 
-        redis_instance = RedisCluster(
+        redis_instance = await RedisCluster(
             host=REDIS_HOST,
             port=REDIS_PORT,
             password=REDIS_PASSWORD,
@@ -153,8 +154,15 @@ def generate_schedule(workflow_id, schedule_id):
 
         app_requirements = get_app_requirements(dependency_graph['nodes'])
 
+        logger.info(f"Generating Schedule with app requirements: {app_requirements}")
+
         scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": redis})
+
+        logger.info(f"Scheduler Instance Created Successfully")
+
         schedule_result = scheduler.schedule()
+
+        logger.info(f"Schedule Result: {schedule_result}")
 
         result = submit_schedule(schedule_id, schedule_result, workflow_id)
 
@@ -380,7 +388,7 @@ def main():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    redis = initialize_redis()
+    redis = asyncio.get_event_loop().run_until_complete(initialize_redis())
     node_id = os.getenv('NODE_ID')
     stream = Stream(url=os.getenv('VALIDATOR_URL', 'tcp://validator:4004'))
     context = create_context('secp256k1')
