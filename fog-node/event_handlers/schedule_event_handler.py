@@ -111,8 +111,9 @@ def initialize_redis():
                 logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
 
 
-def handle_event(event):
+async def handle_event_async(event):
     if event.event_type == "schedule-request":
+        logger.info("Schedule Event Handler: schedule-request event")
         workflow_id = None
         schedule_id = None
         assigned_scheduler = None
@@ -124,8 +125,9 @@ def handle_event(event):
             elif attr.key == "assigned_scheduler":
                 assigned_scheduler = attr.value
         if workflow_id and schedule_id and assigned_scheduler == node_id:
-            generate_schedule(workflow_id, schedule_id)
+            await generate_schedule_async(workflow_id, schedule_id)
     elif event.event_type == "schedule-confirmation":
+        logger.info("Schedule Event Handler: schedule-confirmation event")
         schedule_id = None
         workflow_id = None
         schedule = None
@@ -140,41 +142,32 @@ def handle_event(event):
             elif attr.key == "schedule_proposer":
                 schedule_proposer = attr.value
         if schedule and schedule_id and workflow_id and schedule_proposer == node_id:
-            publish_schedule(schedule_id, schedule, workflow_id)
-    elif event.event_type == "sawtooth/block-commit":
-        logger.info("New block committed")
-    else:
-        logger.info(f"Received unhandled event type: {event.event_type}")
+            await publish_schedule(schedule_id, schedule, workflow_id)
 
 
-def generate_schedule(workflow_id, schedule_id):
+async def generate_schedule_async(workflow_id, schedule_id):
     try:
         dependency_graph = get_dependency_graph(workflow_id)
-
         logger.info(f"Generating Schedule with dependency graph: {dependency_graph}")
 
         app_requirements = get_app_requirements(dependency_graph['nodes'])
-
         logger.info(f"Generating Schedule with app requirements: {app_requirements}")
 
         scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": redis})
-
         logger.info(f"Scheduler Instance Created Successfully")
 
-        schedule_result = asyncio.get_event_loop().run_until_complete(scheduler.schedule())
-
+        schedule_result = await scheduler.schedule()
         logger.info(f"Schedule Result: {schedule_result}")
 
-        result = submit_schedule(schedule_id, schedule_result, workflow_id)
-
+        result = await submit_schedule(schedule_id, schedule_result, workflow_id)
         logger.info(f"Generated and stored schedule for {schedule_id}, hash submitted to blockchain: {result}")
     except Exception as e:
         logger.error(f"Error generating schedule: {str(e)}")
 
 
-def publish_schedule(schedule_id, schedule, workflow_id):
+async def publish_schedule(schedule_id, schedule, workflow_id):
     try:
-        store_schedule_in_redis(schedule_id, schedule, workflow_id)
+        await store_schedule_in_redis(schedule_id, schedule, workflow_id)
     except Exception as e:
         logger.error(f"Error publishing schedule: {str(e)}")
 
@@ -226,7 +219,7 @@ def get_state(address):
         return None
 
 
-def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
+async def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
     schedule_data = {
         'schedule_id': schedule_id,
         'schedule': schedule_result,
@@ -236,11 +229,11 @@ def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
     schedule_json = json.dumps(schedule_data)
     key = f"schedule_{schedule_id}"
 
-    redis.set(key, schedule_json)
-    redis.publish("schedule", schedule_json)
+    await redis.set(key, schedule_json)
+    await redis.publish("schedule", schedule_json)
 
 
-def submit_schedule(schedule_id, schedule, workflow_id):
+async def submit_schedule(schedule_id, schedule, workflow_id):
     payload = {
         'schedule_id': schedule_id,
         'schedule': schedule,
@@ -248,8 +241,13 @@ def submit_schedule(schedule_id, schedule, workflow_id):
         'schedule_proposer': node_id
     }
 
-    schedule_txn = create_transaction(SCHEDULE_CONFIRMATION_FAMILY_NAME, SCHEDULE_CONFIRMATION_FAMILY_VERSION, payload,
-                                      [SCHEDULE_NAMESPACE], [SCHEDULE_NAMESPACE])
+    schedule_txn = create_transaction(
+        SCHEDULE_CONFIRMATION_FAMILY_NAME,
+        SCHEDULE_CONFIRMATION_FAMILY_VERSION,
+        payload,
+        [SCHEDULE_NAMESPACE],
+        [SCHEDULE_NAMESPACE]
+    )
 
     status_payload = {
         "schedule_id": schedule_id,
@@ -259,11 +257,16 @@ def submit_schedule(schedule_id, schedule, workflow_id):
     }
     status_inputs = [STATUS_NAMESPACE]
     status_outputs = [STATUS_NAMESPACE]
-    status_txn = create_transaction(STATUS_FAMILY_NAME, STATUS_FAMILY_VERSION,
-                                    status_payload, status_inputs, status_outputs)
+    status_txn = create_transaction(
+        STATUS_FAMILY_NAME,
+        STATUS_FAMILY_VERSION,
+        status_payload,
+        status_inputs,
+        status_outputs
+    )
 
     batch = create_batch([schedule_txn, status_txn])
-    return submit_batch(batch)
+    return await submit_batch_async(batch)
 
 
 def create_transaction(family_name, family_version, payload, inputs, outputs):
@@ -307,16 +310,23 @@ def create_batch(transactions):
     )
 
 
-def submit_batch(batch):
+async def submit_batch_async(batch):
     batch_list = BatchList(batches=[batch])
-    response = stream.send(
-        message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
-        content=batch_list.SerializeToString()
-    ).result()
-    return process_future_result(response)
+    loop = asyncio.get_event_loop()
+
+    # Send the batch submission request asynchronously
+    response = await loop.run_in_executor(
+        None,
+        lambda: stream.send(
+            message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
+            content=batch_list.SerializeToString()
+        ).result()
+    )
+
+    return await process_future_result_async(response)
 
 
-def process_future_result(future_result):
+async def process_future_result_async(future_result):
     response = ClientBatchSubmitResponse()
     response.ParseFromString(future_result.content)
 
@@ -339,7 +349,7 @@ def process_future_result(future_result):
         }
 
 
-def main():
+async def main_async():
     logger.info("Starting Schedule Generation Event Handler")
 
     block_commit_subscription = EventSubscription(
@@ -375,12 +385,14 @@ def main():
     while True:
         try:
             msg_future = stream.receive()
-            msg = msg_future.result()
+            msg = await asyncio.get_event_loop().run_in_executor(None, msg_future.result)
+
             if msg.message_type == Message.CLIENT_EVENTS:
                 event_list = EventList()
                 event_list.ParseFromString(msg.content)
                 for event in event_list.events:
-                    handle_event(event)
+                    # Process events asynchronously
+                    _ = asyncio.create_task(handle_event_async(event))
         except KeyboardInterrupt:
             break
         except Exception as e:
@@ -394,4 +406,6 @@ if __name__ == '__main__':
     stream = Stream(url=os.getenv('VALIDATOR_URL', 'tcp://validator:4004'))
     context = create_context('secp256k1')
     signer = CryptoFactory(context).new_signer(load_private_key())
-    main()
+
+    # Run the async main function
+    asyncio.run(main_async())
