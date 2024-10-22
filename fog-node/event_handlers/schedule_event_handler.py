@@ -241,12 +241,12 @@ def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
 
 
 def submit_schedule(schedule_id, schedule, workflow_id):
-    payload = json.dumps({
+    payload = {
         'schedule_id': schedule_id,
         'schedule': schedule,
         'workflow_id': workflow_id,
         'schedule_proposer': node_id
-    }).encode()
+    }
 
     schedule_txn = create_transaction(SCHEDULE_CONFIRMATION_FAMILY_NAME, SCHEDULE_CONFIRMATION_FAMILY_VERSION, payload,
                                       [SCHEDULE_NAMESPACE], [SCHEDULE_NAMESPACE])
