@@ -118,20 +118,28 @@ def handle_event(event):
         logger.info("Schedule Event Handler: schedule-request event")
         workflow_id = None
         schedule_id = None
+        source_url = None
+        source_public_key = None
         assigned_scheduler = None
         for attr in event.attributes:
             if attr.key == "workflow_id":
                 workflow_id = attr.value
             elif attr.key == "schedule_id":
                 schedule_id = attr.value
+            elif attr.key == "source_url":
+                source_url = attr.value
+            elif attr.key == "source_public_key":
+                source_public_key = attr.value
             elif attr.key == "assigned_scheduler":
                 assigned_scheduler = attr.value
-        if workflow_id and schedule_id and assigned_scheduler == node_id:
-            generate_schedule(workflow_id, schedule_id)
+        if workflow_id and schedule_id and source_url and source_public_key and assigned_scheduler == node_id:
+            generate_schedule(workflow_id, schedule_id, source_url, source_public_key)
     elif event.event_type == "schedule-confirmation":
         logger.info("Schedule Event Handler: schedule-confirmation event")
         schedule_id = None
         workflow_id = None
+        source_url = None
+        source_public_key = None
         schedule = None
         schedule_proposer = None
         for attr in event.attributes:
@@ -139,19 +147,23 @@ def handle_event(event):
                 schedule_id = attr.value
             elif attr.key == "workflow_id":
                 workflow_id = attr.value
+            elif attr.key == "source_url":
+                source_url = attr.value
+            elif attr.key == "source_public_key":
+                source_public_key = attr.value
             elif attr.key == "schedule":
                 schedule = json.loads(attr.value)
             elif attr.key == "schedule_proposer":
                 schedule_proposer = attr.value
-        if schedule and schedule_id and workflow_id and schedule_proposer == node_id:
-            publish_schedule(schedule_id, schedule, workflow_id)
+        if schedule and schedule_id and workflow_id and source_url and source_public_key and schedule_proposer == node_id:
+            publish_schedule(schedule_id, schedule, workflow_id, source_url, source_public_key)
     elif event.event_type == "sawtooth/block-commit":
         logger.info("Schedule Event Handler: New block committed")
     else:
         logger.info(f"Schedule Event Handler: Received unhandled event type: {event.event_type}")
 
 
-def generate_schedule(workflow_id, schedule_id):
+def generate_schedule(workflow_id, schedule_id, source_url, source_public_key):
     try:
         dependency_graph = get_dependency_graph(workflow_id)
 
@@ -170,16 +182,16 @@ def generate_schedule(workflow_id, schedule_id):
         logger.info(f"Schedule Result: {schedule_result}")
 
         with ThreadPoolExecutor() as executor:
-            future = executor.submit(submit_schedule, schedule_id, schedule_result, workflow_id)
+            future = executor.submit(submit_schedule, schedule_id, schedule_result, workflow_id, source_url, source_public_key)
             future.add_done_callback(lambda f: logger.info(f"Schedule submission completed. Hash: {f.result()}"))
 
     except Exception as e:
         logger.error(f"Error generating schedule: {str(e)}")
 
 
-def publish_schedule(schedule_id, schedule, workflow_id):
+def publish_schedule(schedule_id, schedule, workflow_id, source_url, source_public_key):
     try:
-        store_schedule_in_redis(schedule_id, schedule, workflow_id)
+        store_schedule_in_redis(schedule_id, schedule, workflow_id, source_url, source_public_key)
     except Exception as e:
         logger.error(f"Error publishing schedule: {str(e)}")
 
@@ -231,12 +243,14 @@ def get_state(address):
         return None
 
 
-def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
+def store_schedule_in_redis(schedule_id, schedule_result, workflow_id, source_url, source_public_key):
     logger.info(f"Publishing Schedule: {schedule_id} to redis")
     schedule_data = {
         'schedule_id': schedule_id,
         'schedule': schedule_result,
         'workflow_id': workflow_id,
+        'source_url': source_url,
+        'source_public_key': source_public_key,
         'status': 'ACTIVE'
     }
     schedule_json = json.dumps(schedule_data)
@@ -246,11 +260,13 @@ def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
     asyncio.get_event_loop().run_until_complete(redis.set(key, schedule_json))
 
 
-def submit_schedule(schedule_id, schedule, workflow_id):
+def submit_schedule(schedule_id, schedule, workflow_id, source_url, source_public_key):
     payload = {
         'schedule_id': schedule_id,
         'schedule': schedule,
         'workflow_id': workflow_id,
+        'source_url': source_url,
+        'source_public_key': source_public_key,
         'schedule_proposer': node_id
     }
 

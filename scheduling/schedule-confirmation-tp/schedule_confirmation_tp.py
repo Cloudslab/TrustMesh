@@ -52,6 +52,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         schedule_id = payload['schedule_id']
         schedule = payload['schedule']
         schedule_proposer = payload['schedule_proposer']
+        source_url, source_public_key = payload['source_url'], payload['source_public_key']
 
         logger.info(f"Workflow ID: {workflow_id}, Schedule ID: {schedule_id}, Schedule Proposer: {schedule_proposer}")
 
@@ -81,6 +82,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             attributes=[("workflow_id", workflow_id),
                         ("schedule_id", schedule_id),
                         ("schedule", schedule_str),
+                        ("source_url", source_url),
+                        ("source_public_key", source_public_key),
                         ("schedule_proposer", schedule_proposer)]
         )
         logger.info(f"Emitted event for schedule confirmation. workflow_id: {workflow_id}, "

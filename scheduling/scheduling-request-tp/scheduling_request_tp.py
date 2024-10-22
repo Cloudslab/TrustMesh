@@ -130,6 +130,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         logger.info("Entering _handle_schedule_request method")
         workflow_id = payload['workflow_id']
         schedule_id = payload['schedule_id']
+        source_url, source_public_key = payload['source_url'], payload['source_public_key']
+
         logger.info(f"Workflow ID: {workflow_id}, Schedule ID: {schedule_id}")
 
         if not self._validate_workflow_id(context, workflow_id):
@@ -144,6 +146,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         schedule_data = {
             'workflow_id': workflow_id,
             'schedule_id': schedule_id,
+            'source_url': source_url,
+            'source_public_key': source_public_key,
             'assigned_scheduler': scheduler_node
         }
 
@@ -159,6 +163,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             event_type="schedule-request",
             attributes=[("workflow_id", workflow_id),
                         ("schedule_id", schedule_id),
+                        ("source_url", source_url),
+                        ("source_public_key", source_public_key),
                         ("assigned_scheduler", scheduler_node)]
         )
         logger.info(f"Emitted event for schedule request. workflow_id: {workflow_id}, "
