@@ -7,7 +7,7 @@ import tempfile
 import time
 from sawtooth_sdk.messaging.stream import Stream
 from sawtooth_sdk.protobuf.client_state_pb2 import ClientStateGetRequest, ClientStateGetResponse
-from sawtooth_sdk.protobuf.events_pb2 import EventSubscription, EventFilter, EventList
+from sawtooth_sdk.protobuf.events_pb2 import EventSubscription, EventList
 from sawtooth_sdk.protobuf.client_event_pb2 import ClientEventsSubscribeRequest, ClientEventsSubscribeResponse
 from sawtooth_sdk.protobuf.validator_pb2 import Message
 from sawtooth_sdk.protobuf.transaction_pb2 import TransactionHeader, Transaction
@@ -131,6 +131,8 @@ def generate_schedule(workflow_id, schedule_id):
         dependency_graph = get_dependency_graph(workflow_id)
         app_requirements = get_app_requirements(dependency_graph['nodes'])
 
+        logger.info(f"Generating Schedule with dependency graph: {dependency_graph} and app requirements: {app_requirements}")
+
         scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": redis})
         schedule_result = scheduler.schedule()
 
@@ -160,6 +162,7 @@ def get_app_requirements(app_ids):
         state_entry = get_state(address)
         if state_entry:
             app_data = json.loads(state_entry)
+            logger.info(f"App Requirements for {app_id}: {app_data}")
             app_requirements[app_id] = {
                 "memory": app_data["resource_requirements"]["memory"],
                 "cpu": app_data["resource_requirements"]["cpu"],
