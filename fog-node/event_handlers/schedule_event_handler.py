@@ -129,9 +129,10 @@ def handle_event(event):
 def generate_schedule(workflow_id, schedule_id):
     try:
         dependency_graph = get_dependency_graph(workflow_id)
-        app_requirements = get_app_requirements(dependency_graph['nodes'])
 
-        logger.info(f"Generating Schedule with dependency graph: {dependency_graph} and app requirements: {app_requirements}")
+        logger.info(f"Generating Schedule with dependency graph: {dependency_graph}")
+
+        app_requirements = get_app_requirements(dependency_graph['nodes'])
 
         scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": redis})
         schedule_result = scheduler.schedule()
