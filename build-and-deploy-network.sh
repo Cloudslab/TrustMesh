@@ -532,7 +532,7 @@ items:"
                       key: ca.crt
 
             - name: schedule-confirmation-tp
-              image: murtazahr/scheduling-request-tp:latest
+              image: murtazahr/schedule-confirmation-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
