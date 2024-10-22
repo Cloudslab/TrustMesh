@@ -22,7 +22,7 @@ REDIS_SSL_KEY = os.getenv('REDIS_SSL_KEY')
 REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
 
 # Sawtooth configuration
-FAMILY_NAME = 'iot-schedule'
+FAMILY_NAME = 'schedule-request'
 FAMILY_VERSION = '1.0'
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 SCHEDULE_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
@@ -112,18 +112,8 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             logger.debug(f"Transaction payload: {transaction.payload}")
             payload = json.loads(transaction.payload.decode())
             logger.info(f"Decoded payload: {payload}")
-            action = payload['action']
-            logger.info(f"Action: {action}")
 
-            if action == 'request_schedule':
-                logger.info("Handling schedule request")
-                self._handle_schedule_request(payload, context)
-            elif action == 'submit_schedule':
-                logger.info("Handling schedule submission")
-                self._handle_schedule(payload, context)
-            else:
-                logger.error(f"Invalid action: {action}")
-                raise InvalidTransaction(f"Invalid action: {action}")
+            self._handle_schedule_request(payload, context)
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {str(e)}")
@@ -152,7 +142,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
         schedule_address = self._make_schedule_address(schedule_id)
         schedule_data = {
-            'status': 'PENDING',
             'workflow_id': workflow_id,
             'schedule_id': schedule_id,
             'assigned_scheduler': scheduler_node
@@ -174,29 +163,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         )
         logger.info(f"Emitted event for schedule request. workflow_id: {workflow_id}, "
                     f"schedule_id: {schedule_id}, assigned_scheduler: {scheduler_node}")
-
-    def _handle_schedule(self, payload, context):
-        logger.info("Entering _handle_schedule_hash method")
-        schedule_id = payload['schedule_id']
-        schedule = payload['schedule']
-        logger.info(f"Schedule ID: {schedule_id}, Schedule: {schedule}")
-
-        schedule_address = self._make_schedule_address(schedule_id)
-        state_entries = context.get_state([schedule_address])
-        if state_entries:
-            schedule_data = json.loads(state_entries[0].data.decode())
-            logger.info(f"Current schedule data: {schedule_data}")
-            schedule_data['schedule'] = schedule
-
-            logger.info(f"Updating state for schedule {schedule_id}")
-            context.set_state({
-                schedule_address: json.dumps(schedule_data).encode()
-            })
-
-            logger.info(f"Schedule hash recorded for schedule ID: {schedule_id}")
-        else:
-            logger.error(f"No pending schedule found for ID: {schedule_id}")
-            raise InvalidTransaction(f"No pending schedule found for ID: {schedule_id}")
 
     def _validate_workflow_id(self, context, workflow_id):
         logger.info(f"Validating workflow ID: {workflow_id}")
@@ -252,7 +218,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
     @staticmethod
     def _make_schedule_address(schedule_id):
-        return SCHEDULE_NAMESPACE + hashlib.sha512(schedule_id.encode()).hexdigest()[:64]
+        return SCHEDULE_NAMESPACE + hashlib.sha512((schedule_id + "_request").encode()).hexdigest()[:64]
 
     @staticmethod
     def _make_workflow_address(workflow_id):

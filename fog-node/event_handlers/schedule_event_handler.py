@@ -17,11 +17,14 @@ from sawtooth_signing import create_context, CryptoFactory, secp256k1
 from helper.scheduler import create_scheduler
 from coredis import RedisCluster
 
-FAMILY_NAME = 'iot-schedule'
-FAMILY_VERSION = '1.0'
-SCHEDULE_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
+SCHEDULE_CONFIRMATION_FAMILY_NAME = 'schedule-confirmation'
+SCHEDULE_CONFIRMATION_FAMILY_VERSION = '1.0'
+STATUS_FAMILY_NAME = 'schedule-status'
+STATUS_FAMILY_VERSION = '1.0'
+SCHEDULE_NAMESPACE = hashlib.sha512(SCHEDULE_CONFIRMATION_FAMILY_NAME.encode()).hexdigest()[:6]
+STATUS_NAMESPACE = hashlib.sha512(STATUS_FAMILY_NAME.encode()).hexdigest()[:6]
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
-DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:64]
+DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:6]
 
 # Redis configuration
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
@@ -120,6 +123,22 @@ def handle_event(event):
                 assigned_scheduler = attr.value
         if workflow_id and schedule_id and assigned_scheduler == node_id:
             generate_schedule(workflow_id, schedule_id)
+    elif event.event_type == "schedule-confirmation":
+        schedule_id = None
+        workflow_id = None
+        schedule = None
+        schedule_proposer = None
+        for attr in event.attributes:
+            if attr.key == "schedule_id":
+                schedule_id = attr.value
+            elif attr.key == "workflow_id":
+                workflow_id = attr.value
+            elif attr.key == "schedule":
+                schedule = attr.value
+            elif attr.key == "schedule_proposer":
+                schedule_proposer = attr.value
+        if schedule and schedule_id and workflow_id and schedule_proposer == node_id:
+            publish_schedule(schedule_id, schedule, workflow_id)
     elif event.event_type == "sawtooth/block-commit":
         logger.info("New block committed")
     else:
@@ -137,13 +156,18 @@ def generate_schedule(workflow_id, schedule_id):
         scheduler = create_scheduler("lcdwrr", dependency_graph, app_requirements, {"redis-client": redis})
         schedule_result = scheduler.schedule()
 
-        store_schedule_in_redis(schedule_id, schedule_result, workflow_id)
-
-        result = submit_schedule(schedule_id, schedule_result)
+        result = submit_schedule(schedule_id, schedule_result, workflow_id)
 
         logger.info(f"Generated and stored schedule for {schedule_id}, hash submitted to blockchain: {result}")
     except Exception as e:
         logger.error(f"Error generating schedule: {str(e)}")
+
+
+def publish_schedule(schedule_id, schedule, workflow_id):
+    try:
+        store_schedule_in_redis(schedule_id, schedule, workflow_id)
+    except Exception as e:
+        logger.error(f"Error publishing schedule: {str(e)}")
 
 
 def get_dependency_graph(workflow_id):
@@ -207,38 +231,56 @@ def store_schedule_in_redis(schedule_id, schedule_result, workflow_id):
     redis.publish("schedule", schedule_json)
 
 
-def submit_schedule(schedule_id, schedule):
+def submit_schedule(schedule_id, schedule, workflow_id):
     payload = json.dumps({
-        'action': 'submit_schedule',
         'schedule_id': schedule_id,
-        'schedule': schedule
+        'schedule': schedule,
+        'workflow_id': workflow_id,
+        'schedule_proposer': node_id
     }).encode()
 
-    transaction = create_transaction(payload)
-    batch = create_batch([transaction])
+    schedule_txn = create_transaction(SCHEDULE_CONFIRMATION_FAMILY_NAME, SCHEDULE_CONFIRMATION_FAMILY_VERSION, payload,
+                                      [SCHEDULE_NAMESPACE], [SCHEDULE_NAMESPACE])
+
+    status_payload = {
+        "schedule_id": schedule_id,
+        "workflow_id": workflow_id,
+        "timestamp": int(time.time()),
+        "status": "ACTIVE"
+    }
+    status_inputs = [STATUS_NAMESPACE]
+    status_outputs = [STATUS_NAMESPACE]
+    status_txn = create_transaction(STATUS_FAMILY_NAME, STATUS_FAMILY_VERSION,
+                                    status_payload, status_inputs, status_outputs)
+
+    batch = create_batch([schedule_txn, status_txn])
     return submit_batch(batch)
 
 
-def create_transaction(payload):
-    header = TransactionHeader(
-        family_name=FAMILY_NAME,
-        family_version=FAMILY_VERSION,
-        inputs=[SCHEDULE_NAMESPACE, WORKFLOW_NAMESPACE],
-        outputs=[SCHEDULE_NAMESPACE],
+def create_transaction(family_name, family_version, payload, inputs, outputs):
+    payload_bytes = json.dumps(payload).encode()
+
+    txn_header = TransactionHeader(
+        family_name=family_name,
+        family_version=family_version,
+        inputs=inputs,
+        outputs=outputs,
         signer_public_key=signer.get_public_key().as_hex(),
         batcher_public_key=signer.get_public_key().as_hex(),
         dependencies=[],
-        payload_sha512=hashlib.sha512(payload).hexdigest(),
+        payload_sha512=hashlib.sha512(payload_bytes).hexdigest(),
         nonce=hex(int(time.time()))
     ).SerializeToString()
 
-    signature = signer.sign(header)
+    signature = signer.sign(txn_header)
 
-    return Transaction(
-        header=header,
-        payload=payload,
-        header_signature=signature
+    txn = Transaction(
+        header=txn_header,
+        header_signature=signature,
+        payload=payload_bytes
     )
+
+    return txn
 
 
 def create_batch(transactions):
@@ -299,8 +341,12 @@ def main():
         event_type="schedule-request"
     )
 
+    schedule_confirmation_event = EventSubscription(
+        event_type="schedule-confirmation"
+    )
+
     request = ClientEventsSubscribeRequest(
-        subscriptions=[block_commit_subscription, schedule_request_event]
+        subscriptions=[block_commit_subscription, schedule_request_event, schedule_confirmation_event]
     )
 
     logger.info(f"Subscribing request: {request}")

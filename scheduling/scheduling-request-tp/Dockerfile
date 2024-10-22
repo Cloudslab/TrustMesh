@@ -12,6 +12,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the transaction processor script
-COPY scheduling_tp.py .
+COPY scheduling_request_tp.py .
 
-CMD ["python", "scheduling_tp.py"]
+CMD ["python", "scheduling_request_tp.py"]

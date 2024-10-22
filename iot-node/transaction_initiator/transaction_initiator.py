@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Constants
-SCHEDULE_FAMILY_NAME = 'iot-schedule'
+SCHEDULE_FAMILY_NAME = 'schedule-request'
 SCHEDULE_FAMILY_VERSION = '1.0'
 STATUS_FAMILY_NAME = 'schedule-status'
 STATUS_FAMILY_VERSION = '1.0'
@@ -105,7 +105,6 @@ class TransactionCreator:
             timestamp = int(time.time())
 
             schedule_payload = {
-                "action": "request_schedule",
                 "workflow_id": workflow_id,
                 "schedule_id": schedule_id,
                 "source_url": f"{IOT_URL}:{iot_port}",
@@ -123,7 +122,7 @@ class TransactionCreator:
                 "schedule_id": schedule_id,
                 "workflow_id": workflow_id,
                 "timestamp": timestamp,
-                "status": "ACTIVE"
+                "status": "REQUESTED"
             }
             status_inputs = [STATUS_NAMESPACE]
             status_outputs = [STATUS_NAMESPACE]

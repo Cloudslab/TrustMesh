@@ -505,8 +505,8 @@ items:"
                       name: redis-certificates
                       key: ca.crt
 
-            - name: scheduling-tp
-              image: murtazahr/scheduling-tp:latest
+            - name: scheduling-request-tp
+              image: murtazahr/scheduling-request-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
@@ -530,6 +530,12 @@ items:"
                     secretKeyRef:
                       name: redis-certificates
                       key: ca.crt
+
+            - name: schedule-confirmation-tp
+              image: murtazahr/scheduling-request-tp:latest
+              env:
+                - name: VALIDATOR_URL
+                  value: \"tcp://$service_name:4004\"
 
             - name: sawtooth-pbft-engine
               image: hyperledger/sawtooth-pbft-engine:chime
