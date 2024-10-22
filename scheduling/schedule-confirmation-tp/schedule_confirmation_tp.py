@@ -72,12 +72,15 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
         logger.info(f"Schedule {schedule_id} proposed by node {schedule_proposer} is confirmed")
 
+        # Convert schedule dict to string for event attribute
+        schedule_str = json.dumps(schedule)
+
         # Emit an event
         context.add_event(
             event_type="schedule-confirmation",
             attributes=[("workflow_id", workflow_id),
                         ("schedule_id", schedule_id),
-                        ("schedule", schedule),
+                        ("schedule", schedule_str),
                         ("schedule_proposer", schedule_proposer)]
         )
         logger.info(f"Emitted event for schedule confirmation. workflow_id: {workflow_id}, "

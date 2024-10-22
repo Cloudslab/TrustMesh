@@ -136,7 +136,7 @@ def handle_event(event):
             elif attr.key == "workflow_id":
                 workflow_id = attr.value
             elif attr.key == "schedule":
-                schedule = attr.value
+                schedule = json.loads(attr.value)
             elif attr.key == "schedule_proposer":
                 schedule_proposer = attr.value
         if schedule and schedule_id and workflow_id and schedule_proposer == node_id:
