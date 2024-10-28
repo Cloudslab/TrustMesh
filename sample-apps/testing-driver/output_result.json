@@ -1,58 +1,32 @@
 {
   "data": [
     {
-      "window_start_time": 0,
-      "window_end_time": 9.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 0
-      }
-    },
-    {
-      "window_start_time": 5,
-      "window_end_time": 14.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 5
-      }
-    },
-    {
-      "window_start_time": 10,
-      "window_end_time": 19.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 10
-      }
-    },
-    {
-      "window_start_time": 15,
-      "window_end_time": 24.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 15
-      }
-    },
-    {
-      "window_start_time": 20,
-      "window_end_time": 29.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 20
-      }
-    },
-    {
-      "window_start_time": 25,
-      "window_end_time": 34.996,
-      "arrhythmia": {
-        "type": "PVC",
-        "probability": 1.0,
-        "time": 25
-      }
+      "alert_id": "alert_20241029_102617_cold_chain_1",
+      "timestamp": "2024-10-29T10:26:17.128141",
+      "severity": "WARNING",
+      "device_id": "cold_chain_1",
+      "window_info": {
+        "start": "2024-10-22T10:00:00",
+        "end": "2024-10-22T10:00:09"
+      },
+      "conditions": {
+        "temperature": {
+          "mean": 8.42,
+          "min": 8.3,
+          "max": 8.7
+        },
+        "humidity": {
+          "mean": 65.58,
+          "min": 64.8,
+          "max": 67.0
+        },
+        "deviations": {
+          "temperature": 3.42,
+          "humidity": 5.58
+        },
+        "anomaly_score": 0.630068321323722
+      },
+      "message": "Cold Chain Alert - WARNING\nDevice: cold_chain_1\nTime Window: 2024-10-22T10:00:00 to 2024-10-22T10:00:09\n\nConditions:\n- Temperature: mean=8.42\u00b0C (min=8.3, max=8.7)\n- Humidity: mean=65.58% (min=64.8, max=67.0)\n- Anomaly Score: 0.630\n\nATTENTION: Cold chain parameters approaching critical levels."
     }
   ]
 }
