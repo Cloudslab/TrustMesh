@@ -16,6 +16,15 @@ docker build -t yolo-object-detection:latest -f Dockerfile .
 cd "$TEST_APP_DIR/object-detection/task2_output_image_generation" || exit
 docker build -t bounding-box-image-generation:latest -f Dockerfile .
 
+cd "$TEST_APP_DIR/supply-chain-monitoring/task1_process_sensor_data" || exit
+docker build -t process-sensor-data:latest -f Dockerfile .
+
+cd "$TEST_APP_DIR/supply-chain-monitoring/task2_detect_anomalies" || exit
+docker build -t anomaly-detection:latest -f Dockerfile .
+
+cd "$TEST_APP_DIR/supply-chain-monitoring/task3_generate_alerts" || exit
+docker build -t generate-alerts:latest -f Dockerfile .
+
 # Make sure user is in the correct working directory
 cd "$WORK_DIR" || exit
 
@@ -23,6 +32,9 @@ cd "$WORK_DIR" || exit
 docker save -o auto-docker-deployment/docker-image-client/arrhythmia-detection.tar arrhythmia-detection
 docker save -o auto-docker-deployment/docker-image-client/yolo-object-detection.tar yolo-object-detection
 docker save -o auto-docker-deployment/docker-image-client/bounding-box-image-generation.tar bounding-box-image-generation
+docker save -o auto-docker-deployment/docker-image-client/process-sensor-data.tar process-sensor-data
+docker save -o auto-docker-deployment/docker-image-client/anomaly-detection.tar anomaly-detection
+docker save -o auto-docker-deployment/docker-image-client/generate-alerts.tar generate-alerts
 
 # Build peer-registry-tp image
 docker build -t $DOCKER_USERNAME/peer-registry-tp:latest ./peer-registry/peer-registry-tp
