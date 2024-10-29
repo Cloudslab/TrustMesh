@@ -185,8 +185,8 @@ def main():
 
     # Save model and scaler
     logger.info("Saving model and scaler...")
-    joblib.dump(model, 'models/anomaly_detector.joblib')
-    joblib.dump(scaler, 'models/scaler.joblib')
+    joblib.dump(model, 'anomaly_detector.joblib')
+    joblib.dump(scaler, 'scaler.joblib')
 
     logger.info("Training complete!")
 

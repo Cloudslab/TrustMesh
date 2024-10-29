@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 # Load the pre-trained model and scaler
 try:
-    model = joblib.load('models/anomaly_detector.joblib')
-    scaler = joblib.load('models/scaler.joblib')
+    model = joblib.load('anomaly_detector.joblib')
+    scaler = joblib.load('scaler.joblib')
     logger.info("Successfully loaded pre-trained anomaly detection model")
 except Exception as e:
     logger.error(f"Failed to load model: {str(e)}")

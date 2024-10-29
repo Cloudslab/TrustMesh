@@ -34,7 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy only necessary files
 COPY process.py .
-COPY models ./models
+COPY anomaly_detector.joblib .
+COPY scaler.joblib .
 
 # Make port 12345 available to the world outside this container
 EXPOSE 12345
