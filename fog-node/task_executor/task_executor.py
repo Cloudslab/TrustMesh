@@ -213,6 +213,7 @@ class TaskExecutor:
         try:
             schedule_id = schedule_data.get('schedule_id')
             current_status = schedule_data.get('status')
+            current_completed_app_id = schedule_data.get('completed_app_id') if schedule_data.get('completed_app_id') else None
 
             if not schedule_id or not current_status:
                 logger.warning(f"Received invalid schedule data: {schedule_data}")
@@ -221,12 +222,16 @@ class TaskExecutor:
             # Check if we've already processed this change and if the status is the same
             if schedule_id in self.processed_changes:
                 prev_status = self.processed_changes[schedule_id]['status']
-                if prev_status == current_status:
+                prev_completed_app_id = self.processed_changes[schedule_id]['completed_app_id']
+                if prev_status == current_status and prev_completed_app_id == current_completed_app_id:
                     logger.debug(f"Skipping already processed schedule with unchanged status: {schedule_id}")
                     return
-                else:
+                elif prev_status != current_status:
+                    logger.info(f"Re-processing schedule {schedule_id} due to status change: {prev_status} -> {current_status}")
+                elif prev_completed_app_id != current_completed_app_id:
                     logger.info(
-                        f"Re-processing schedule {schedule_id} due to status change: {prev_status} -> {current_status}")
+                        f"Re-processing schedule {schedule_id} due to completed_app_id change: "
+                        f"{prev_completed_app_id} -> {current_completed_app_id}")
 
             # Process the schedule based on its status
             if current_status == 'ACTIVE':
@@ -241,7 +246,8 @@ class TaskExecutor:
             # Mark this change as processed with its current status
             self.processed_changes[schedule_id] = {
                 'timestamp': time.time(),
-                'status': current_status
+                'status': current_status,
+                'completed_app_id': current_completed_app_id
             }
 
         except Exception as e:
