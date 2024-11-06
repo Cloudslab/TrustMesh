@@ -1,0 +1,199 @@
+---
+# First, create a ServiceAccount and required RBAC permissions
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: latency-monitor
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: latency-monitor-binding
+subjects:
+  - kind: ServiceAccount
+    name: latency-monitor
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: node-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# ConfigMap for the Python script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: latency-monitor-script
+  namespace: monitoring
+data:
+  monitor.py: |
+    #!/usr/bin/env python3
+    import subprocess
+    import json
+    import statistics
+    from datetime import datetime
+    import time
+    from kubernetes import client, config
+    from prometheus_client import start_http_server, Gauge
+    
+    # Define Prometheus metrics
+    LATENCY_GAUGE = Gauge('node_network_latency_milliseconds', 
+                         'Network latency between nodes', 
+                         ['source_node', 'target_node', 'type'])
+    
+    def get_node_ips():
+        """Get internal IPs of all nodes in the cluster."""
+        config.load_incluster_config()
+        v1 = client.CoreV1Api()
+        nodes = v1.list_node().items
+    
+        node_ips = {}
+        for node in nodes:
+            for addr in node.status.addresses:
+                if addr.type == "InternalIP":
+                    node_ips[node.metadata.name] = addr.address
+        return node_ips
+    
+    def ping_node(ip_address, count=10):
+        """Ping a node and return statistics."""
+        try:
+            cmd = f"ping -c {count} -i 0.2 {ip_address}"
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+    
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if "avg" in line:
+                        stats = line.split('=')[1].strip().split('/')
+                        return {
+                            'min': float(stats[0]),
+                            'avg': float(stats[1]),
+                            'max': float(stats[2]),
+                            'mdev': float(stats[3].split()[0])
+                        }
+            return None
+        except Exception as e:
+            print(f"Error pinging {ip_address}: {str(e)}")
+            return None
+    
+    def measure_and_export_metrics():
+        """Continuously measure latency and export Prometheus metrics."""
+        while True:
+            try:
+                node_ips = get_node_ips()
+                hostname = subprocess.check_output(
+                    ["hostname"]).decode('utf-8').strip()
+    
+                for target_node, target_ip in node_ips.items():
+                    if hostname != target_node:
+                        stats = ping_node(target_ip)
+                        if stats:
+                            # Export all metrics
+                            LATENCY_GAUGE.labels(
+                                source_node=hostname,
+                                target_node=target_node,
+                                type='min'
+                            ).set(stats['min'])
+    
+                            LATENCY_GAUGE.labels(
+                                source_node=hostname,
+                                target_node=target_node,
+                                type='avg'
+                            ).set(stats['avg'])
+    
+                            LATENCY_GAUGE.labels(
+                                source_node=hostname,
+                                target_node=target_node,
+                                type='max'
+                            ).set(stats['max'])
+    
+                            LATENCY_GAUGE.labels(
+                                source_node=hostname,
+                                target_node=target_node,
+                                type='mdev'
+                            ).set(stats['mdev'])
+    
+                # Wait before next measurement
+                time.sleep(60)  # Measure every minute
+    
+            except Exception as e:
+                print(f"Error in measurement loop: {str(e)}")
+                time.sleep(10)  # Wait before retry on error
+    
+    if __name__ == "__main__":
+        # Start Prometheus HTTP server
+        start_http_server(8000)
+        measure_and_export_metrics()
+---
+# DaemonSet definition
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: latency-monitor
+  namespace: monitoring
+  labels:
+    app: latency-monitor
+spec:
+  selector:
+    matchLabels:
+      app: latency-monitor
+  template:
+    metadata:
+      labels:
+        app: latency-monitor
+    spec:
+      serviceAccountName: latency-monitor
+      containers:
+        - name: latency-monitor
+          image: python:3.9-slim
+          ports:
+            - containerPort: 8000
+              name: metrics
+          command:
+            - /bin/bash
+            - -c
+            - |
+              pip install kubernetes prometheus_client &&
+              python /scripts/monitor.py
+          volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            capabilities:
+              add: ["NET_RAW"]  # Required for ping
+      volumes:
+        - name: script-volume
+          configMap:
+            name: latency-monitor-script
+            defaultMode: 0755
+---
+# Service to expose metrics
+apiVersion: v1
+kind: Service
+metadata:
+  name: latency-monitor
+  namespace: monitoring
+  labels:
+    app: latency-monitor
+spec:
+  selector:
+    app: latency-monitor
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
