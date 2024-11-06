@@ -161,7 +161,9 @@ spec:
             - /bin/bash
             - -c
             - |
-              pip install kubernetes prometheus_client &&
+              apt-get update && \
+              apt-get install -y iputils-ping && \
+              pip install kubernetes prometheus_client && \
               python /scripts/monitor.py
           volumeMounts:
             - name: script-volume
@@ -197,3 +199,19 @@ spec:
     - name: metrics
       port: 8000
       targetPort: metrics
+---
+# ServiceMonitor for Prometheus Operator (optional)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: latency-monitor
+  namespace: monitoring
+  labels:
+    release: prometheus  # Adjust according to your Prometheus Operator setup
+spec:
+  selector:
+    matchLabels:
+      app: latency-monitor
+  endpoints:
+    - port: metrics
+      interval: 60s
