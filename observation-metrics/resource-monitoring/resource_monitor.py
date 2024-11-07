@@ -67,6 +67,8 @@ class K3sNodeMonitor:
                     'node_name': node_name,
                     'cpu_usage_percent': metrics.get('cpu_percent', 0),
                     'memory_usage_percent': metrics.get('memory_percent', 0),
+                    'cpu_cores': metrics.get('cpu_cores', 0),
+                    'memory_bytes': metrics.get('memory_bytes', 0),
                     'pod_count': pod_count,
                     'node_status': node.status.conditions[-1].type,
                     'kubelet_version': node.status.node_info.kubelet_version
@@ -97,31 +99,78 @@ class K3sNodeMonitor:
 
                     # Get node capacity
                     node = self.core_api.read_node(node_name)
-                    cpu_capacity = self.parse_quantity(node.status.capacity['cpu'])
+                    cpu_capacity = float(node.status.capacity['cpu'])
                     memory_capacity = self.parse_quantity(node.status.capacity['memory'])
 
+                    # Convert CPU nanocores to cores for percentage calculation
+                    cpu_cores = cpu_usage / 1e9  # Convert nanocores to cores
+
                     return {
-                        'cpu_percent': round((cpu_usage / cpu_capacity) * 100, 2),
-                        'memory_percent': round((memory_usage / memory_capacity) * 100, 2)
+                        'cpu_percent': round((cpu_cores / cpu_capacity) * 100, 2),
+                        'memory_percent': round((memory_usage / memory_capacity) * 100, 2),
+                        'cpu_cores': round(cpu_cores, 3),
+                        'memory_bytes': memory_usage
                     }
         except Exception as e:
-            print(f"Error getting metrics-server data: {str(e)}")
-        return {'cpu_percent': 0, 'memory_percent': 0}
+            print(f"Error getting metrics for node {node_name}: {str(e)}")
+        return {'cpu_percent': 0, 'memory_percent': 0, 'cpu_cores': 0, 'memory_bytes': 0}
+
+    def parse_quantity(self, quantity):
+        """Parse Kubernetes quantity strings to numeric values"""
+        try:
+            if isinstance(quantity, (int, float)):
+                return float(quantity)
+
+            # Handle CPU units
+            if quantity.endswith('n'):  # nanocores
+                return float(quantity.rstrip('n'))
+            elif quantity.endswith('u'):  # microcores
+                return float(quantity.rstrip('u')) * 1000
+            elif quantity.endswith('m'):  # millicores
+                return float(quantity.rstrip('m')) * 1000000
+
+            # Handle memory units
+            multipliers = {
+                'Ki': 1024,
+                'Mi': 1024 ** 2,
+                'Gi': 1024 ** 3,
+                'Ti': 1024 ** 4,
+                'Pi': 1024 ** 5,
+                'K': 1000,
+                'M': 1000 ** 2,
+                'G': 1000 ** 3,
+                'T': 1000 ** 4,
+                'P': 1000 ** 5
+            }
+
+            for suffix, multiplier in multipliers.items():
+                if quantity.endswith(suffix):
+                    return float(quantity[:-len(suffix)]) * multiplier
+
+            # No units - return as is
+            return float(quantity)
+
+        except (ValueError, TypeError) as e:
+            print(f"Error parsing quantity '{quantity}': {str(e)}")
+            return 0
 
     def _get_node_status_data(self, node):
         """Get basic metrics from node status when metrics-server is not available"""
         try:
-            allocatable_cpu = self.parse_quantity(node.status.allocatable['cpu'])
+            allocatable_cpu = float(node.status.allocatable['cpu'])
             allocatable_memory = self.parse_quantity(node.status.allocatable['memory'])
-            capacity_cpu = self.parse_quantity(node.status.capacity['cpu'])
+            capacity_cpu = float(node.status.capacity['cpu'])
             capacity_memory = self.parse_quantity(node.status.capacity['memory'])
 
             return {
                 'cpu_percent': round(((capacity_cpu - allocatable_cpu) / capacity_cpu) * 100, 2),
-                'memory_percent': round(((capacity_memory - allocatable_memory) / capacity_memory) * 100, 2)
+                'memory_percent': round(((capacity_memory - allocatable_memory) / capacity_memory) * 100, 2),
+                'cpu_cores': allocatable_cpu,
+                'memory_bytes': allocatable_memory
             }
-        except Exception:
-            return {'cpu_percent': 0, 'memory_percent': 0}
+        except Exception as e:
+            print(f"Error getting node status data: {str(e)}")
+            return {'cpu_percent': 0, 'memory_percent': 0, 'cpu_cores': 0, 'memory_bytes': 0}
 
     def _get_pod_count(self, node_name):
         """Get number of pods running on the node"""
@@ -136,38 +185,13 @@ class K3sNodeMonitor:
     def _get_container_runtime_metrics(self, node_name):
         """Get container runtime metrics if available"""
         try:
-            # Try to get metrics from node exporter if available
-            # This is a simplified version - you might need to adjust based on your setup
             node = self.core_api.read_node(node_name)
-            address = next((addr.address for addr in node.status.addresses
-                            if addr.type == 'InternalIP'), None)
-
-            if not address:
-                return {}
-
-            # Here you could add code to query node-exporter metrics
-            # For now, we'll return basic system info
             return {
                 'container_runtime': node.status.node_info.container_runtime_version,
                 'os_image': node.status.node_info.os_image,
             }
         except Exception:
             return {}
-
-    def parse_quantity(self, quantity):
-        """Parse Kubernetes quantity strings to numeric values"""
-        if isinstance(quantity, str):
-            if quantity.endswith('Ki'):
-                return int(quantity[:-2]) * 1024
-            elif quantity.endswith('Mi'):
-                return int(quantity[:-2]) * 1024 * 1024
-            elif quantity.endswith('Gi'):
-                return int(quantity[:-2]) * 1024 * 1024 * 1024
-            elif quantity.endswith('m'):
-                return int(quantity[:-1]) / 1000
-            else:
-                return int(quantity)
-        return quantity
 
     def monitor(self):
         """Start monitoring nodes for the specified duration"""
@@ -185,7 +209,7 @@ class K3sNodeMonitor:
         """Save collected metrics to CSV file"""
         df = pd.DataFrame(self.metrics_data)
         df.to_csv(filename, index=False)
-        print(f"Metrics saved to {filename}")
+        print(f"\nMetrics saved to {filename}")
 
         # Print summary statistics
         print("\nSummary Statistics:")
@@ -195,6 +219,8 @@ class K3sNodeMonitor:
             print(f"Average CPU Usage: {node_data['cpu_usage_percent'].mean():.2f}%")
             print(f"Average Memory Usage: {node_data['memory_usage_percent'].mean():.2f}%")
             print(f"Average Pod Count: {node_data['pod_count'].mean():.0f}")
+            print(f"CPU Cores: {node_data['cpu_cores'].iloc[0]:.2f}")
+            print(f"Memory: {node_data['memory_bytes'].iloc[0] / (1024 ** 3):.2f} GB")
 
 
 def main():
