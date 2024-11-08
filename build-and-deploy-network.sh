@@ -705,6 +705,7 @@ items:"
                   fi && if [ ! -e /var/lib/sawtooth/genesis.batch ]; then
                     sawadm genesis config-genesis.batch config.batch
                   fi &&
+                  echo \"sawtooth.state.pruning.enabled = false\" > /etc/sawtooth/validator.toml &&
                   echo \"network_public_key = '\${NETWORK_PUBLIC_KEY}'\" > /etc/sawtooth/validator.toml &&
                   echo \"network_private_key = '\${NETWORK_PRIVATE_KEY}'\" >> /etc/sawtooth/validator.toml &&
                   chown root:sawtooth /etc/sawtooth/validator.toml &&
