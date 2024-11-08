@@ -818,9 +818,9 @@ items:"
               image: murtazahr/iot-node:latest
               env:
                 - name: VALIDATOR_URLS
-                  value: \"\$(for ((j=0; j<num_fog_nodes; j++)); do echo -n \"tcp://sawtooth-\$j:4004\"; if [ \$j -lt \$((num_fog_nodes-1)) ]; then echo -n \",\"; fi; done)\"
+                  value: $(for ((j=0; j<num_fog_nodes; j++)); do echo -n \"tcp://sawtooth-$j:4004\"; if [ $j -lt $((num_fog_nodes-1)) ]; then echo -n ,; fi; done)
                 - name: IOT_URL
-                  value: \"tcp://$service_name\"
+                  value: tcp://$service_name
 
   - apiVersion: v1
     kind: Service
