@@ -601,7 +601,7 @@ items:"
                 - name: RESOURCE_UPDATE_INTERVAL
                   value: \"30\"
                 - name: RESOURCE_UPDATE_BATCH_SIZE
-                  value: \"200\"
+                  value: \"500\"
                 - name: COUCHDB_USER
                   valueFrom:
                     secretKeyRef:
