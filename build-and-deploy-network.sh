@@ -599,9 +599,9 @@ items:"
                 - name: COUCHDB_HOST
                   value: \"couchdb-$i.default.svc.cluster.local:6984\"
                 - name: RESOURCE_UPDATE_INTERVAL
-                  value: \"300\"
+                  value: \"30\"
                 - name: RESOURCE_UPDATE_BATCH_SIZE
-                  value: \"10\"
+                  value: \"200\"
                 - name: COUCHDB_USER
                   valueFrom:
                     secretKeyRef:
