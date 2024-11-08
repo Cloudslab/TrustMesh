@@ -8,6 +8,7 @@ from sawtooth_sdk.protobuf.transaction_pb2 import TransactionHeader, Transaction
 from sawtooth_sdk.protobuf.batch_pb2 import BatchHeader, Batch, BatchList
 from sawtooth_signing import create_context, CryptoFactory, secp256k1
 from sawtooth_sdk.messaging.stream import Stream
+from threading import Lock
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,7 +28,8 @@ WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[
 DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:6]
 
 PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/client.priv')
-VALIDATOR_URL = os.getenv('VALIDATOR_URL', 'tcp://validator:4004')
+# Get comma-separated list of validator URLs from environment variable
+VALIDATOR_URLS = os.getenv('VALIDATOR_URLS', 'tcp://validator:4004').split(',')
 IOT_URL = os.getenv('IOT_URL', 'tcp://iot')
 
 
@@ -83,21 +85,58 @@ def create_batch(transactions, signer):
     return batch
 
 
-def submit_batch(batch):
-    stream = Stream(VALIDATOR_URL)
-    future = stream.send(
-        message_type='CLIENT_BATCH_SUBMIT_REQUEST',
-        content=BatchList(batches=[batch]).SerializeToString()
-    )
-    result = future.result()
-    return result
-
-
 class TransactionCreator:
+    _instance = None
+    _lock = Lock()
+    _current_validator_index = 0
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(TransactionCreator, cls).__new__(cls)
+        return cls._instance
+
     def __init__(self):
-        private_key = load_private_key(PRIVATE_KEY_FILE)
-        context = create_context('secp256k1')
-        self.signer = CryptoFactory(context).new_signer(private_key)
+        if not hasattr(self, '_initialized'):
+            private_key = load_private_key(PRIVATE_KEY_FILE)
+            context = create_context('secp256k1')
+            self.signer = CryptoFactory(context).new_signer(private_key)
+            self._initialized = True
+
+    def get_next_validator_url(self):
+        """Get the next validator URL using round-robin selection"""
+        with self._lock:
+            url = VALIDATOR_URLS[self._current_validator_index]
+            self._current_validator_index = (self._current_validator_index + 1) % len(VALIDATOR_URLS)
+            return url
+
+    def submit_batch(self, batch):
+        """Submit batch to the next validator in the round-robin sequence"""
+        validator_url = self.get_next_validator_url()
+        logger.info(f"Submitting batch to validator: {validator_url}")
+
+        try:
+            stream = Stream(validator_url)
+            future = stream.send(
+                message_type='CLIENT_BATCH_SUBMIT_REQUEST',
+                content=BatchList(batches=[batch]).SerializeToString()
+            )
+            result = future.result()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to submit to validator {validator_url}: {str(e)}")
+            # If submission fails, try the next validator
+            if len(VALIDATOR_URLS) > 1:
+                validator_url = self.get_next_validator_url()
+                logger.info(f"Retrying with next validator: {validator_url}")
+                stream = Stream(validator_url)
+                future = stream.send(
+                    message_type='CLIENT_BATCH_SUBMIT_REQUEST',
+                    content=BatchList(batches=[batch]).SerializeToString()
+                )
+                return future.result()
+            raise
 
     def create_and_send_transactions(self, iot_data, workflow_id, iot_port, iot_public_key):
         try:
@@ -142,7 +181,7 @@ class TransactionCreator:
 
             # Create and submit batch with all three transactions
             batch = create_batch([schedule_txn, status_txn, iot_data_txn], self.signer)
-            result = submit_batch(batch)
+            result = self.submit_batch(batch)
 
             logger.info({
                 "message": "Data submitted successfully",
