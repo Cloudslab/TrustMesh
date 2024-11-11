@@ -701,11 +701,10 @@ items:"
                   sleep 30 &&
                   echo sawtooth.consensus.pbft.members=[\"${pbft_members}\"] &&
                   if [ ! -e config.batch ]; then
-                    sawset proposal create -k /root/.sawtooth/keys/my_key.priv sawtooth.consensus.algorithm.name=pbft sawtooth.consensus.algorithm.version=1.0 sawtooth.consensus.pbft.members=[\"${pbft_members}\"] sawtooth.publisher.max_batches_per_block=1200 sawtooth.validator.state_pruning_enabled=true sawtooth.validator.state_pruning_block_depth=1000 sawtooth.validator.state_pruning_grace_period=10 sawtooth.validator.max_database_size_mb=3096 sawtooth.validator.state_pruning_check_interval=100 -o config.batch
+                    sawset proposal create -k /root/.sawtooth/keys/my_key.priv sawtooth.consensus.algorithm.name=pbft sawtooth.consensus.algorithm.version=1.0 sawtooth.consensus.pbft.members=[\"${pbft_members}\"] sawtooth.publisher.max_batches_per_block=1200 sawtooth.validator.state_pruning_enabled=false sawtooth.validator.max_database_size_mb=7500 -o config.batch
                   fi && if [ ! -e /var/lib/sawtooth/genesis.batch ]; then
                     sawadm genesis config-genesis.batch config.batch
                   fi &&
-                  echo \"sawtooth.state.pruning.enabled = false\" > /etc/sawtooth/validator.toml &&
                   echo \"network_public_key = '\${NETWORK_PUBLIC_KEY}'\" > /etc/sawtooth/validator.toml &&
                   echo \"network_private_key = '\${NETWORK_PRIVATE_KEY}'\" >> /etc/sawtooth/validator.toml &&
                   chown root:sawtooth /etc/sawtooth/validator.toml &&
