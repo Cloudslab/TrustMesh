@@ -229,7 +229,7 @@ def main():
 
     # Initialize and run monitor
     monitor = K3sNodeMonitor(
-        interval_seconds=10,  # Collect metrics every 10 seconds
+        interval_seconds=1,  # Collect metrics every 10 seconds
         duration_minutes=30  # Run for 30 minutes
     )
 
