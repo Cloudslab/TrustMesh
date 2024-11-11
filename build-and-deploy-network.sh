@@ -701,7 +701,7 @@ items:"
                   sleep 30 &&
                   echo sawtooth.consensus.pbft.members=[\"${pbft_members}\"] &&
                   if [ ! -e config.batch ]; then
-                    sawset proposal create -k /root/.sawtooth/keys/my_key.priv sawtooth.consensus.algorithm.name=pbft sawtooth.consensus.algorithm.version=1.0 sawtooth.consensus.pbft.members=[\"${pbft_members}\"] sawtooth.publisher.max_batches_per_block=1200 sawtooth.validator.state_pruning_enabled=false sawtooth.validator.max_database_size_mb=7500 -o config.batch
+                    sawset proposal create -k /root/.sawtooth/keys/my_key.priv sawtooth.consensus.algorithm.name=pbft sawtooth.consensus.algorithm.version=1.0 sawtooth.consensus.pbft.members=[\"${pbft_members}\"] sawtooth.publisher.max_batches_per_block=100 sawtooth.validator.state_pruning_enabled=false sawtooth.validator.max_database_size_mb=15000 sawtooth.validation.block_validation_rules=NofX:1,block_info sawtooth.consensus.pbft.block_publishing_delay=2000 sawtooth.validator.transaction_queue_max_length=10000 -o config.batch
                   fi && if [ ! -e /var/lib/sawtooth/genesis.batch ]; then
                     sawadm genesis config-genesis.batch config.batch
                   fi &&
