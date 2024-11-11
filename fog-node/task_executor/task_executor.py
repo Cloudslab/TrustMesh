@@ -46,7 +46,7 @@ REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
 
 class TaskExecutor:
     def __init__(self):
-        self.task_queue = asyncio.PriorityQueue()
+        self.task_queue = asyncio.Queue()
         self.docker_client = docker.from_env()
         self.thread_pool = ThreadPoolExecutor()
         self.loop = asyncio.get_event_loop()
@@ -260,7 +260,6 @@ class TaskExecutor:
             logger.warning(f"Schedule document {schedule_doc['schedule_id']} does not contain a 'schedule' field")
             return
         node_schedule = schedule.get('node_schedule', {})
-
         schedule_id = schedule_doc.get('schedule_id')
 
         if CURRENT_NODE in node_schedule:
@@ -269,14 +268,12 @@ class TaskExecutor:
 
                 logger.info(f"Checking dependencies for app_id: {app_id} in schedule {schedule_id}")
                 if await self.check_dependencies(schedule_doc, app_id):
-                    logger.info(
-                        f"Dependencies met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
+                    logger.info(f"Dependencies met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
+                    # Simply put the tuple of app_id and schedule_doc
                     await self.task_queue.put((app_id, schedule_doc))
                     self.task_status[task_key] = 'QUEUED'
                 else:
-                    logger.info(
-                        f"Dependencies not met for app_id: {app_id} in schedule {schedule_id}. Will be checked again "
-                        f"on task completions.")
+                    logger.info(f"Dependencies not met for app_id: {app_id} in schedule {schedule_id}. Will be checked again on task completions.")
                     self.task_status[task_key] = 'WAITING'
         else:
             logger.info(f"No tasks for current node {CURRENT_NODE} in this schedule")
@@ -312,8 +309,7 @@ class TaskExecutor:
                     continue
 
                 if await self.check_dependencies(schedule_doc, app_id):
-                    logger.info(
-                        f"Dependencies now met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
+                    logger.info(f"Dependencies now met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
                     await self.task_queue.put((app_id, schedule_doc))
                     self.task_status[task_key] = 'QUEUED'
                 else:
