@@ -485,6 +485,7 @@ class TaskExecutor:
             logger.error(f"Error storing task output for {output_key}: {str(e)}", exc_info=True)
             raise
 
+        output_data['schedule_id'] = schedule_id
         return output_data
 
     async def persist_to_cloudant(self, data_id, data, workflow_id, schedule_id):
