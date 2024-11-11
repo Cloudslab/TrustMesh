@@ -272,6 +272,7 @@ class TaskExecutor:
                     # Simply put the tuple of app_id and schedule_doc
                     await self.task_queue.put((app_id, schedule_doc))
                     self.task_status[task_key] = 'QUEUED'
+                    logger.info(f"Task Queue: {self.task_queue}")
                 else:
                     logger.info(f"Dependencies not met for app_id: {app_id} in schedule {schedule_id}. Will be checked again on task completions.")
                     self.task_status[task_key] = 'WAITING'
