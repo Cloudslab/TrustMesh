@@ -257,19 +257,10 @@ node_ips=$(kubectl get pods -l app=redis-cluster -o jsonpath='{range.items[*]}{.
 
 # Create the Redis Cluster
 echo "Creating Redis Cluster with $num_redis_nodes nodes..."
-if [ $num_redis_nodes -lt 6 ]; then
-    # For 4-5 nodes: use 3 masters with 1-2 replicas
-    kubectl exec -it redis-cluster-0 -- redis-cli --cluster create \
-        $(echo $node_ips | sed -e 's/\([0-9.]*\)/\1:6379/g') \
-        --cluster-replicas $(( (num_redis_nodes - 3) / 3 )) \
-        --tls --cert /ssl/redis.crt --key /ssl/redis.key --cacert /ssl/ca.crt -a $redis_password
-else
-    # For 6-10 nodes, use 2 replicas
-    kubectl exec -it redis-cluster-0 -- redis-cli --cluster create \
-        $(echo $node_ips | sed -e 's/\([0-9.]*\)/\1:6379/g') \
-        --cluster-replicas 2 \
-        --tls --cert /ssl/redis.crt --key /ssl/redis.key --cacert /ssl/ca.crt -a $redis_password
-fi
+kubectl exec -it redis-cluster-0 -- redis-cli --cluster create \
+    $(echo $node_ips | sed -e 's/\([0-9.]*\)/\1:6379/g') \
+    --cluster-replicas $(( (num_redis_nodes - 3) / 3 )) \
+    --tls --cert /ssl/redis.crt --key /ssl/redis.key --cacert /ssl/ca.crt -a $redis_password
 
 echo "Waiting for cluster to stabilize..."
 sleep 10  # Give the cluster some time to stabilize
