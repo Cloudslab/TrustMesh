@@ -94,7 +94,7 @@ async def handle_client(reader, writer):
 
         output = {
             "data": [processed_data],  # Single window output
-            "task1_time": time.perf_counter() - start
+            "total_task_time": time.perf_counter() - start
         }
         output_json = json.dumps(output)
         writer.write(output_json.encode())

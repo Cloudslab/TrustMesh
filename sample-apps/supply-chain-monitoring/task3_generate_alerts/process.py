@@ -136,9 +136,7 @@ async def handle_client(reader, writer):
 
         output = {
             "data": results,
-            "task1_time": input_data['task1_time'],
-            "task2_time": input_data['task2_time'],
-            "task3_time": time.perf_counter() - start
+            "total_task_time": input_data['total_task_time'] + time.perf_counter() - start
         }
         output_json = json.dumps(output)
         writer.write(output_json.encode())

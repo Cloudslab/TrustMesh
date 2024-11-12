@@ -467,6 +467,7 @@ class TaskExecutor:
         try:
             output_json = json.dumps({
                 'data': output_data['data'],
+                'total_task_time': output_data['total_task_time'],
                 'workflow_id': workflow_id,
                 'schedule_id': schedule_id,
                 'persist_data': persistence_flag
