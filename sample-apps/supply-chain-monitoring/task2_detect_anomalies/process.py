@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 import traceback
 from datetime import datetime
 from typing import Dict
@@ -86,6 +87,8 @@ async def read_json(reader):
 async def handle_client(reader, writer):
     """Handle incoming client connections"""
     try:
+        start = time.perf_counter()
+
         logger.info("New client connected")
         input_data = await read_json(reader)
 
@@ -102,7 +105,9 @@ async def handle_client(reader, writer):
                 results.append(anomaly_result)
 
         output = {
-            "data": results
+            "data": results,
+            "task1_time": input_data['task1_time'],
+            "task2_time": time.perf_counter() - start,
         }
         output_json = json.dumps(output)
         writer.write(output_json.encode())
