@@ -26,22 +26,26 @@ create_redis_password_secret() {
     kubectl create secret generic redis-password --from-literal=password=$redis_password
 }
 
-# Function to get a list of available fog nodes
-get_fog_nodes() {
-    kubectl get nodes --no-headers | awk '/^fog-node-/ {print $1}'
+# Function to generate fog node names based on count
+generate_fog_nodes() {
+    local num_nodes=$1
+    for i in $(seq 1 $num_nodes); do
+        echo "fog-node-$i"
+    done
 }
 
 # Function to randomly select unique fog nodes
 select_unique_fog_nodes() {
-    local num_nodes=$1
-    local fog_nodes=($(get_fog_nodes))
+    local num_redis_nodes=$1
+    local total_fog_nodes=$2
 
-    if [ ${#fog_nodes[@]} -lt $num_nodes ]; then
-        echo "Error: Not enough fog nodes available. Found ${#fog_nodes[@]}, need $num_nodes." >&2
+    if [ $total_fog_nodes -lt $num_redis_nodes ]; then
+        echo "Error: Not enough fog nodes available. Found $total_fog_nodes, need $num_redis_nodes." >&2
         exit 1
     fi
 
-    shuf -e "${fog_nodes[@]}" | head -n $num_nodes
+    local fog_nodes=($(generate_fog_nodes $total_fog_nodes))
+    shuf -e "${fog_nodes[@]}" | head -n $num_redis_nodes
 }
 
 generate_redis_cluster_yaml() {
@@ -210,6 +214,20 @@ check_cluster_status() {
     return 1
 }
 
+# Check if number of fog nodes argument is provided
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <number_of_fog_nodes>"
+    exit 1
+fi
+
+total_fog_nodes=$1
+
+# Validate input is a positive integer
+if ! [[ "$total_fog_nodes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: Please provide a positive integer for the number of fog nodes."
+    exit 1
+fi
+
 # Main script execution
 generate_ssl_certs
 
@@ -219,16 +237,12 @@ redis_password=$(generate_password)
 # Create Redis password secret
 create_redis_password_secret "$redis_password"
 
-# Get the number of available fog nodes
-fog_node_count=$(get_fog_nodes | wc -l)
-echo "Number of available fog nodes: $fog_node_count"
-
 # Calculate the number of Redis nodes (minimum 4, maximum 10)
-num_redis_nodes=$(( fog_node_count > 10 ? 10 : fog_node_count ))
+num_redis_nodes=$(( total_fog_nodes > 10 ? 10 : total_fog_nodes ))
 echo "Number of Redis nodes to be created: $num_redis_nodes"
 
-# Randomly select unique fog nodes
-readarray -t selected_nodes < <(select_unique_fog_nodes $num_redis_nodes)
+# Randomly select from all available fog nodes
+readarray -t selected_nodes < <(select_unique_fog_nodes $num_redis_nodes $total_fog_nodes)
 echo "Selected fog nodes: ${selected_nodes[*]}"
 
 # Generate and apply the Redis Cluster YAML

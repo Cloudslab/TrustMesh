@@ -922,7 +922,7 @@ generate_network_key_zmq
 # Part 2: Create redis cluster
 mkdir -p kubernetes-manifests/generated
 
-/bin/bash ./redis-setup.sh
+/bin/bash ./redis-setup.sh "$num_fog_nodes"
 
 # Part 3: Generate YAML file for config and secrets
 # Create the PBFT key generation job YAML
