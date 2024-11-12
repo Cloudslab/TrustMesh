@@ -213,7 +213,8 @@ class TaskExecutor:
         try:
             schedule_id = schedule_data.get('schedule_id')
             current_status = schedule_data.get('status')
-            current_completed_app_id = schedule_data.get('completed_app_id') if schedule_data.get('completed_app_id') else None
+            current_completed_app_id = schedule_data.get('completed_app_id') if schedule_data.get(
+                'completed_app_id') else None
 
             if not schedule_id or not current_status:
                 logger.warning(f"Received invalid schedule data: {schedule_data}")
@@ -227,7 +228,8 @@ class TaskExecutor:
                     logger.debug(f"Skipping already processed schedule with unchanged status: {schedule_id}")
                     return
                 elif prev_status != current_status:
-                    logger.info(f"Re-processing schedule {schedule_id} due to status change: {prev_status} -> {current_status}")
+                    logger.info(
+                        f"Re-processing schedule {schedule_id} due to status change: {prev_status} -> {current_status}")
                 elif prev_completed_app_id != current_completed_app_id:
                     logger.info(
                         f"Re-processing schedule {schedule_id} due to completed_app_id change: "
@@ -268,13 +270,15 @@ class TaskExecutor:
 
                 logger.info(f"Checking dependencies for app_id: {app_id} in schedule {schedule_id}")
                 if await self.check_dependencies(schedule_doc, app_id):
-                    logger.info(f"Dependencies met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
+                    logger.info(
+                        f"Dependencies met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
                     # Simply put the tuple of app_id and schedule_doc
                     await self.task_queue.put((app_id, schedule_doc))
                     self.task_status[task_key] = 'QUEUED'
                     logger.info(f"Task Queue: {self.task_queue}")
                 else:
-                    logger.info(f"Dependencies not met for app_id: {app_id} in schedule {schedule_id}. Will be checked again on task completions.")
+                    logger.info(
+                        f"Dependencies not met for app_id: {app_id} in schedule {schedule_id}. Will be checked again on task completions.")
                     self.task_status[task_key] = 'WAITING'
         else:
             logger.info(f"No tasks for current node {CURRENT_NODE} in this schedule")
@@ -310,7 +314,8 @@ class TaskExecutor:
                     continue
 
                 if await self.check_dependencies(schedule_doc, app_id):
-                    logger.info(f"Dependencies now met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
+                    logger.info(
+                        f"Dependencies now met for app_id: {app_id} in schedule {schedule_id}. Adding to task queue.")
                     await self.task_queue.put((app_id, schedule_doc))
                     self.task_status[task_key] = 'QUEUED'
                 else:
@@ -444,20 +449,22 @@ class TaskExecutor:
                     raise Exception(f"'data' field not found in input document for key: {input_key}")
                 input_data = input_doc['data']
                 persistence_flag = input_doc['persist_data']
+                total_task_time = 0
                 logger.debug(f"Input data fetched for task {app_id}")
             except Exception as e:
                 logger.error(f"Error fetching input data for {input_key}: {str(e)}", exc_info=True)
                 raise
         else:
             try:
-                input_data, persistence_flag = await self.fetch_dependency_outputs(workflow_id, schedule_id, app_id,
-                                                                                   schedule)
+                input_data, persistence_flag, total_task_time = await self.fetch_dependency_outputs(workflow_id,
+                                                                                                    schedule_id, app_id,
+                                                                                                    schedule)
             except Exception as e:
                 logger.error(f"Error fetching dependency outputs for task {app_id}: {str(e)}", exc_info=True)
                 raise
 
         try:
-            output_data = await self.run_docker_task(app_id, input_data)
+            output_data = await self.run_docker_task(app_id, input_data, total_task_time)
         except Exception as e:
             logger.error(f"Error running Docker task for {app_id}: {str(e)}", exc_info=True)
             raise
@@ -467,6 +474,7 @@ class TaskExecutor:
         try:
             output_json = json.dumps({
                 'data': output_data['data'],
+                'total_task_time': output_data['total_task_time'],
                 'workflow_id': workflow_id,
                 'schedule_id': schedule_id,
                 'persist_data': persistence_flag
@@ -558,6 +566,7 @@ class TaskExecutor:
         output_doc = None
 
         dependency_outputs = []
+        total_task_time = 0
         for task in dependencies:
             dep_app_id = task['app_id']
             output_key = f"iot_data_{workflow_id}_{schedule_id}_{dep_app_id}_output"
@@ -565,6 +574,7 @@ class TaskExecutor:
                 output_json = await self.fetch_data_with_retry(output_key)
                 output_doc = json.loads(output_json)
                 dependency_outputs.extend(output_doc['data'])
+                total_task_time += output_doc['total_task_time']
             except (RedisError, json.JSONDecodeError) as e:
                 logger.error(f"Error fetching or parsing dependency output for {output_key}: {str(e)}", exc_info=True)
                 raise
@@ -580,9 +590,9 @@ class TaskExecutor:
 
         persistence_flag = output_doc['persist_data']
 
-        return dependency_outputs, persistence_flag
+        return dependency_outputs, persistence_flag, total_task_time
 
-    async def run_docker_task(self, app_id, input_data):
+    async def run_docker_task(self, app_id, input_data, total_task_time):
         container_name = f"sawtooth-{app_id}"
         logger.info(f"Starting run_docker_task for container: {container_name}")
         try:
@@ -607,7 +617,7 @@ class TaskExecutor:
             )
 
             try:
-                payload = json.dumps({'data': input_data}).encode()
+                payload = json.dumps({'data': input_data, 'total_task_time': total_task_time}).encode()
                 writer.write(payload)
                 await writer.drain()
 

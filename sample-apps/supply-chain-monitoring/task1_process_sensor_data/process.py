@@ -1,4 +1,6 @@
 import json
+import time
+
 import numpy as np
 import asyncio
 import logging
@@ -74,6 +76,9 @@ async def read_json(reader):
 async def handle_client(reader, writer):
     """Handle incoming client connections"""
     try:
+
+        start_time = time.perf_counter()
+
         logger.info("New client connected")
         input_data = await read_json(reader)
 
@@ -90,7 +95,8 @@ async def handle_client(reader, writer):
         processed_data = process_readings_batch(input_data['data'])
 
         output = {
-            "data": [processed_data]  # Single window output
+            "data": [processed_data],  # Single window output
+            "total_task_time": input_data['total_task_time'] + time.perf_counter() - start_time
         }
         output_json = json.dumps(output)
         writer.write(output_json.encode())
