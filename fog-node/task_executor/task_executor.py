@@ -444,22 +444,20 @@ class TaskExecutor:
                     raise Exception(f"'data' field not found in input document for key: {input_key}")
                 input_data = input_doc['data']
                 persistence_flag = input_doc['persist_data']
-                total_task_time = 0
                 logger.debug(f"Input data fetched for task {app_id}")
             except Exception as e:
                 logger.error(f"Error fetching input data for {input_key}: {str(e)}", exc_info=True)
                 raise
         else:
             try:
-                input_data, persistence_flag, total_task_time = await self.fetch_dependency_outputs(workflow_id,
-                                                                                                    schedule_id, app_id,
-                                                                                                    schedule)
+                input_data, persistence_flag = await self.fetch_dependency_outputs(workflow_id, schedule_id, app_id,
+                                                                                   schedule)
             except Exception as e:
                 logger.error(f"Error fetching dependency outputs for task {app_id}: {str(e)}", exc_info=True)
                 raise
 
         try:
-            output_data = await self.run_docker_task(app_id, input_data, total_task_time)
+            output_data = await self.run_docker_task(app_id, input_data)
         except Exception as e:
             logger.error(f"Error running Docker task for {app_id}: {str(e)}", exc_info=True)
             raise
@@ -469,7 +467,6 @@ class TaskExecutor:
         try:
             output_json = json.dumps({
                 'data': output_data['data'],
-                'total_task_time': output_data['total_task_time'],
                 'workflow_id': workflow_id,
                 'schedule_id': schedule_id,
                 'persist_data': persistence_flag
@@ -561,7 +558,6 @@ class TaskExecutor:
         output_doc = None
 
         dependency_outputs = []
-        total_task_time = 0
         for task in dependencies:
             dep_app_id = task['app_id']
             output_key = f"iot_data_{workflow_id}_{schedule_id}_{dep_app_id}_output"
@@ -569,7 +565,6 @@ class TaskExecutor:
                 output_json = await self.fetch_data_with_retry(output_key)
                 output_doc = json.loads(output_json)
                 dependency_outputs.extend(output_doc['data'])
-                total_task_time += output_doc['total_task_time']
             except (RedisError, json.JSONDecodeError) as e:
                 logger.error(f"Error fetching or parsing dependency output for {output_key}: {str(e)}", exc_info=True)
                 raise
@@ -585,9 +580,9 @@ class TaskExecutor:
 
         persistence_flag = output_doc['persist_data']
 
-        return dependency_outputs, persistence_flag, total_task_time
+        return dependency_outputs, persistence_flag
 
-    async def run_docker_task(self, app_id, input_data, total_task_time):
+    async def run_docker_task(self, app_id, input_data):
         container_name = f"sawtooth-{app_id}"
         logger.info(f"Starting run_docker_task for container: {container_name}")
         try:
