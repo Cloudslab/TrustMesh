@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Dict, List
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from sklearn.svm import OneClassSVM
 from sklearn.preprocessing import StandardScaler
 import warnings
 
@@ -18,244 +17,140 @@ logger = logging.getLogger(__name__)
 
 
 class FeatureExtractor:
-    def __init__(self):
-        self.n_iterations = 1000  # Match task 1's iteration count
-
-    def extract_wavelet_features(self, analysis_data: Dict) -> List[float]:
-        """Extract features from wavelet analysis"""
+    @staticmethod
+    def extract_essential_features(processed_data: Dict) -> List[float]:
+        """Extract only the most important features while conserving memory"""
         features = []
 
-        # Process each wavelet family's features
-        for key, value in analysis_data.items():
-            if isinstance(value, dict) and all(k in value for k in ['mean', 'std', 'energy', 'entropy']):
+        # Add stability index
+        features.append(processed_data['environmental_stability_index'])
+
+        # Extract key statistics from temperature analysis
+        temp_analysis = processed_data['temperature_analysis']
+        for key in ['segment_0', 'segment_1', 'segment_2']:  # Use only first few segments
+            if key in temp_analysis:
+                segment = temp_analysis[key]
                 features.extend([
-                    value['mean'],
-                    value['std'],
-                    value['energy'],
-                    value['entropy']
+                    segment['mean'],
+                    segment['std'],
+                    segment['range']
                 ])
 
-        return features
-
-    def extract_frequency_features(self, analysis_data: Dict) -> List[float]:
-        """Extract features from frequency band analysis"""
-        features = []
-
-        # Process frequency band features
-        for i in range(self.n_iterations):
-            band_key = f'freq_band_{i}'
-            if band_key in analysis_data:
-                band_data = analysis_data[band_key]
+        # Extract key statistics from humidity analysis
+        humid_analysis = processed_data['humidity_analysis']
+        for key in ['segment_0', 'segment_1', 'segment_2']:  # Use only first few segments
+            if key in humid_analysis:
+                segment = humid_analysis[key]
                 features.extend([
-                    band_data['power'],
-                    band_data['mean'],
-                    band_data['std']
+                    segment['mean'],
+                    segment['std'],
+                    segment['range']
                 ])
 
-        return features
-
-    def extract_segment_features(self, analysis_data: Dict) -> List[float]:
-        """Extract features from time-domain segment analysis"""
-        features = []
-
-        # Process segment features
-        for i in range(self.n_iterations):
-            segment_key = f'segment_{i}'
-            if segment_key in analysis_data:
-                segment_data = analysis_data[segment_key]
-                features.extend([
-                    segment_data['mean'],
-                    segment_data['std'],
-                    segment_data.get('skew', 0),
-                    segment_data.get('kurtosis', 0),
-                    segment_data['range']
-                ])
-
-        return features
-
-    def extract_correlation_features(self, correlation_data: Dict) -> List[float]:
-        """Extract features from correlation analysis"""
-        features = []
-
-        # Extract baseline correlation features
-        if 'baseline' in correlation_data:
-            baseline = correlation_data['baseline']
+        # Extract essential correlation features
+        corr_analysis = processed_data['correlation_analysis']
+        if 'baseline' in corr_analysis:
+            baseline = corr_analysis['baseline']
             features.extend([
                 baseline['max_correlation'],
-                baseline['lag_at_max'],
                 baseline['mean_correlation']
             ])
-
-        # Extract iteration-based correlation features
-        for i in range(self.n_iterations):
-            # Find matching iteration keys (they contain 'iteration_{i}')
-            for key, value in correlation_data.items():
-                if f'iteration_{i}' in key:
-                    features.extend([
-                        value['max_correlation'],
-                        value['lag_at_max'],
-                        value['mean_correlation']
-                    ])
-                    break
 
         return features
 
 
 class AnomalyDetector:
-    def __init__(self, n_estimators=1000, contamination=0.1):
+    def __init__(self, n_estimators=100, contamination=0.1):
+        """Initialize a lightweight anomaly detector"""
         self.feature_extractor = FeatureExtractor()
         self.scaler = StandardScaler()
         self.n_estimators = n_estimators
         self.contamination = contamination
-        self.models = {}  # Will be initialized during fit
+        self.model = None
 
-    def generate_synthetic_data(self, feature_dim: int, n_samples: int = 10000) -> np.ndarray:
-        """Generate synthetic data for model fitting"""
-        # Generate normal distribution for each feature
+    def generate_synthetic_data(self, feature_dim: int, n_samples: int = 500) -> np.ndarray:
+        """Generate a small synthetic dataset for model fitting"""
+        np.random.seed(42)  # For reproducibility
+
+        # Generate normal distribution for core behavior
         synthetic_data = np.random.normal(0, 1, (n_samples, feature_dim))
 
-        # Add some structured patterns
-        for i in range(0, feature_dim, 10):  # Add correlations every 10 features
-            if i + 1 < feature_dim:
-                synthetic_data[:, i + 1] = synthetic_data[:, i] * 0.7 + np.random.normal(0, 0.3, n_samples)
-
-        # Add some outliers
+        # Add a few outliers
         n_outliers = int(n_samples * self.contamination)
         outlier_indices = np.random.choice(n_samples, n_outliers, replace=False)
-        synthetic_data[outlier_indices] *= np.random.uniform(5, 10, (n_outliers, feature_dim))
+        synthetic_data[outlier_indices] *= 5
 
         return synthetic_data
 
-    def fit_models(self, features: np.ndarray):
-        """Initialize and fit models with either real or synthetic data"""
+    def fit_model(self, features: np.ndarray):
+        """Initialize and fit model with minimal data"""
         feature_dim = features.shape[1]
 
-        # Generate synthetic training data
+        # Generate small synthetic dataset
         synthetic_data = self.generate_synthetic_data(feature_dim)
 
         # Combine real and synthetic data
         training_data = np.vstack([features, synthetic_data])
 
-        # Scale the combined data
+        # Scale the data
         training_data_scaled = self.scaler.fit_transform(training_data)
 
-        # Initialize and fit models
-        self.models = {
-            'isolation_forest': IsolationForest(
-                n_estimators=self.n_estimators,
-                contamination=self.contamination,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'one_class_svm': OneClassSVM(
-                kernel='rbf',
-                nu=self.contamination,
-                gamma='scale'
-            )
-        }
+        # Initialize and fit a lightweight model
+        self.model = IsolationForest(
+            n_estimators=self.n_estimators,  # Reduced number of trees
+            max_samples='auto',
+            contamination=self.contamination,
+            random_state=42,
+            n_jobs=1  # Single CPU core
+        )
 
-        # Fit each model
-        for name, model in self.models.items():
-            logger.info(f"Fitting {name} with {len(training_data_scaled)} samples...")
-            model.fit(training_data_scaled)
+        logger.info(f"Fitting model with {len(training_data_scaled)} samples...")
+        self.model.fit(training_data_scaled)
 
-    def extract_features(self, processed_data: Dict) -> np.ndarray:
-        """Extract comprehensive feature set from processed data"""
-        features = []
+    def predict(self, features: np.ndarray) -> tuple:
+        """Make predictions using the fitted model"""
+        features_scaled = self.scaler.transform(features)
 
-        # Extract stability index
-        features.append(processed_data['environmental_stability_index'])
+        try:
+            score = -self.model.score_samples(features_scaled)[0]
+            pred = self.model.predict(features_scaled)[0]
 
-        # Extract temperature analysis features
-        temp_analysis = processed_data['temperature_analysis']
-        features.extend(self.feature_extractor.extract_wavelet_features(temp_analysis))
-        features.extend(self.feature_extractor.extract_frequency_features(temp_analysis))
-        features.extend(self.feature_extractor.extract_segment_features(temp_analysis))
-
-        # Extract humidity analysis features
-        humid_analysis = processed_data['humidity_analysis']
-        features.extend(self.feature_extractor.extract_wavelet_features(humid_analysis))
-        features.extend(self.feature_extractor.extract_frequency_features(humid_analysis))
-        features.extend(self.feature_extractor.extract_segment_features(humid_analysis))
-
-        # Extract correlation analysis features
-        correlation_analysis = processed_data['correlation_analysis']
-        features.extend(self.feature_extractor.extract_correlation_features(correlation_analysis))
-
-        # Replace any potential NaN or infinite values
-        features = np.array(features)
-        features[~np.isfinite(features)] = 0
-
-        return features
-
-    def compute_ensemble_scores(self, features: np.ndarray) -> Dict:
-        """Compute anomaly scores using multiple models"""
-        scores = {}
-        predictions = {}
-
-        features_reshaped = features.reshape(1, -1)
-        features_scaled = self.scaler.transform(features_reshaped)
-
-        for name, model in self.models.items():
-            try:
-                if hasattr(model, 'score_samples'):
-                    score = -model.score_samples(features_scaled)[0]
-                else:
-                    score = -model.decision_function(features_scaled)[0]
-
-                pred = model.predict(features_scaled)[0]
-                scores[name] = float(score)
-                predictions[name] = int(pred)
-            except Exception as e:
-                logger.error(f"Error getting prediction from {name}: {str(e)}")
-                scores[name] = None
-                predictions[name] = None
-
-        return scores, predictions
+            return float(score), int(pred)
+        except Exception as e:
+            logger.error(f"Error in prediction: {str(e)}")
+            return None, None
 
 
 def detect_anomaly(processed_data: Dict) -> Dict:
     """Detect anomalies in processed sensor data"""
     try:
-        # Initialize detector
-        detector = AnomalyDetector()
+        # Initialize detector with lightweight configuration
+        detector = AnomalyDetector(n_estimators=100)  # Reduced number of trees
 
-        # Extract features
-        features = detector.extract_features(processed_data)
+        # Extract minimal feature set
+        features = np.array(detector.feature_extractor.extract_essential_features(processed_data))
+        features = features.reshape(1, -1)
 
-        # Fit models with synthetic data
-        detector.fit_models(features.reshape(1, -1))
+        # Fit model and get predictions
+        detector.fit_model(features)
+        anomaly_score, prediction = detector.predict(features)
 
-        # Get ensemble predictions
-        anomaly_scores, model_predictions = detector.compute_ensemble_scores(features)
-
-        # Calculate aggregate anomaly score
-        valid_scores = [score for score in anomaly_scores.values() if score is not None]
-        aggregate_score = np.mean(valid_scores) if valid_scores else 1.0
-
-        # Determine if anomaly based on majority voting
-        valid_predictions = [pred for pred in model_predictions.values() if pred is not None]
-        is_anomaly = sum(1 for p in valid_predictions if p == -1) > len(valid_predictions) / 2
+        # Determine anomaly status
+        is_anomaly = bool(prediction == -1) if prediction is not None else None
 
         return {
-            "is_anomaly": bool(is_anomaly),
-            "anomaly_score": float(aggregate_score),
-            "model_scores": anomaly_scores,
-            "model_predictions": model_predictions,
+            "is_anomaly": is_anomaly,
+            "anomaly_score": anomaly_score if anomaly_score is not None else 1.0,
             "detection_timestamp": datetime.now().isoformat(),
             "device_id": processed_data['device_id'],
             "window_start": processed_data['start_time'],
             "window_end": processed_data['end_time'],
             "environmental_stability": processed_data['environmental_stability_index'],
             "feature_analysis": {
-                "feature_count": len(features),
+                "feature_count": len(features[0]),
                 "non_zero_features": int(np.sum(features != 0)),
-                "feature_statistics": {
-                    "mean": float(np.mean(features)),
-                    "std": float(np.std(features)),
-                    "min": float(np.min(features)),
-                    "max": float(np.max(features))
-                }
+                "feature_mean": float(np.mean(features)),
+                "feature_std": float(np.std(features))
             }
         }
 
