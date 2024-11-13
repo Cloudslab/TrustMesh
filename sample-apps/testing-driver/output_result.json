@@ -1,4 +1,31 @@
 {
-  "data": [],
-  "total_task_time": 160.00505096
+  "data": [
+    {
+      "alert_id": "alert_20241113_172334_cold_chain_abs123",
+      "timestamp": "2024-11-13T17:23:34.742335",
+      "severity": "INFO",
+      "risk_score": 0.0,
+      "categories": [
+        "ANOMALY_DETECTED"
+      ],
+      "device_id": "cold_chain_abs123",
+      "window_info": {
+        "start": "2024-11-13T13:14:53.763730",
+        "end": "2024-11-13T13:15:22.763730"
+      },
+      "conditions": {
+        "environmental_stability": 867801.1162828301,
+        "anomaly_score": 0.6601941569361011,
+        "is_anomaly": true,
+        "feature_analysis": {
+          "feature_count": 21,
+          "non_zero_features": 21,
+          "feature_mean": 42033.64869362311,
+          "feature_std": 184661.17989231055
+        }
+      },
+      "message": "Cold Chain Alert - INFO\nDevice: cold_chain_abs123\nTime Window: 2024-11-13T13:14:53.763730 to 2024-11-13T13:15:22.763730\nRisk Score: 0.00\n\nAlert Categories:\n- ANOMALY_DETECTED\n\nEnvironmental Stability: 867801.1162828301%\n\nAnomaly Analysis:\n- Anomaly Score: 0.6601941569361011\n- Anomaly Detected: True\n\nFeature Analysis:\n- Feature Count: 21\n- Feature Mean: 42033.65\n- Feature Std: 184661.18\n\nRecommended Actions:\n- Continue monitoring\n- Document conditions"
+    }
+  ],
+  "total_task_time": 1.1145767510000004
 }
