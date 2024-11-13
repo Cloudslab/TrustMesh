@@ -68,7 +68,7 @@ class AnomalyDetector:
         self.contamination = contamination
         self.model = None
 
-    def generate_synthetic_data(self, feature_dim: int, n_samples: int = 500) -> np.ndarray:
+    def generate_synthetic_data(self, feature_dim: int, n_samples: int = 2000) -> np.ndarray:
         """Generate a small synthetic dataset for model fitting"""
         np.random.seed(42)  # For reproducibility
 
