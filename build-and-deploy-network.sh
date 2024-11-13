@@ -567,8 +567,11 @@ items:"
                 httpGet:
                   path: /status
                   port: 8008
-                initialDelaySeconds: 15
-                periodSeconds: 10
+                initialDelaySeconds: 15    # Time to wait after container starts before checking
+                periodSeconds: 30          # How often to check
+                timeoutSeconds: 30          # How long to wait for a response
+                failureThreshold: 3        # How many failures before marking unready
+                successThreshold: 1        # How many successes before marking ready
 
             - name: sawtooth-shell
               image: hyperledger/sawtooth-shell:chime
@@ -579,6 +582,7 @@ items:"
                 - \"sawtooth keygen && tail -f /dev/null\"
 
             - name: fog-node
+              resources: {}
               image: murtazahr/fog-node:latest
               securityContext:
                 privileged: true
