@@ -1,0 +1,185 @@
+{
+  "total_task_time": 0,
+  "data": [
+    {
+      "temperature": 4.69,
+      "humidity": 59.77,
+      "timestamp": "2024-11-13T13:14:53.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.7,
+      "humidity": 59.86,
+      "timestamp": "2024-11-13T13:14:54.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.5,
+      "humidity": 57.52,
+      "timestamp": "2024-11-13T13:14:55.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.92,
+      "humidity": 60.43,
+      "timestamp": "2024-11-13T13:14:56.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.78,
+      "humidity": 60.53,
+      "timestamp": "2024-11-13T13:14:57.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.97,
+      "humidity": 63.73,
+      "timestamp": "2024-11-13T13:14:58.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.9,
+      "humidity": 59.68,
+      "timestamp": "2024-11-13T13:14:59.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.99,
+      "humidity": 59.89,
+      "timestamp": "2024-11-13T13:15:00.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.38,
+      "humidity": 58.99,
+      "timestamp": "2024-11-13T13:15:01.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.28,
+      "humidity": 60.47,
+      "timestamp": "2024-11-13T13:15:02.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.1,
+      "humidity": 59.88,
+      "timestamp": "2024-11-13T13:15:03.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.08,
+      "humidity": 62.92,
+      "timestamp": "2024-11-13T13:15:04.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.52,
+      "humidity": 62.24,
+      "timestamp": "2024-11-13T13:15:05.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 6.38,
+      "humidity": 61.28,
+      "timestamp": "2024-11-13T13:15:06.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.18,
+      "humidity": 59.49,
+      "timestamp": "2024-11-13T13:15:07.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.8,
+      "humidity": 60.03,
+      "timestamp": "2024-11-13T13:15:08.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.41,
+      "humidity": 57.52,
+      "timestamp": "2024-11-13T13:15:09.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.37,
+      "humidity": 61.09,
+      "timestamp": "2024-11-13T13:15:10.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.04,
+      "humidity": 57.87,
+      "timestamp": "2024-11-13T13:15:11.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.84,
+      "humidity": 73.81,
+      "timestamp": "2024-11-13T13:15:12.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.16,
+      "humidity": 70.54,
+      "timestamp": "2024-11-13T13:15:13.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.86,
+      "humidity": 69.23,
+      "timestamp": "2024-11-13T13:15:14.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 6.05,
+      "humidity": 69.94,
+      "timestamp": "2024-11-13T13:15:15.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.03,
+      "humidity": 71.59,
+      "timestamp": "2024-11-13T13:15:16.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.52,
+      "humidity": 70.75,
+      "timestamp": "2024-11-13T13:15:17.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5,
+      "humidity": 68.53,
+      "timestamp": "2024-11-13T13:15:18.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.49,
+      "humidity": 70.91,
+      "timestamp": "2024-11-13T13:15:19.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.13,
+      "humidity": 69.6,
+      "timestamp": "2024-11-13T13:15:20.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 5.1,
+      "humidity": 71.49,
+      "timestamp": "2024-11-13T13:15:21.763730",
+      "device_id": "cold_chain_abs123"
+    },
+    {
+      "temperature": 4.55,
+      "humidity": 76.39,
+      "timestamp": "2024-11-13T13:15:22.763730",
+      "device_id": "cold_chain_abs123"
+    }
+  ]
+}

@@ -13,9 +13,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Configuration
-SAMPLE_INTERVAL = 1  # 1 reading per second
-WINDOW_SIZE = 30  # 30 seconds per window
-SEND_INTERVAL = 30  # Send data every 30 seconds
+SAMPLE_INTERVAL = 1
+WINDOW_SIZE = 30
+SEND_INTERVAL = 300
 
 
 class ColdChainSimulator:

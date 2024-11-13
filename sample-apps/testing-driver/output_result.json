@@ -1,32 +1,4 @@
 {
-  "data": [
-    {
-      "alert_id": "alert_20241029_102617_cold_chain_1",
-      "timestamp": "2024-10-29T10:26:17.128141",
-      "severity": "WARNING",
-      "device_id": "cold_chain_1",
-      "window_info": {
-        "start": "2024-10-22T10:00:00",
-        "end": "2024-10-22T10:00:09"
-      },
-      "conditions": {
-        "temperature": {
-          "mean": 8.42,
-          "min": 8.3,
-          "max": 8.7
-        },
-        "humidity": {
-          "mean": 65.58,
-          "min": 64.8,
-          "max": 67.0
-        },
-        "deviations": {
-          "temperature": 3.42,
-          "humidity": 5.58
-        },
-        "anomaly_score": 0.630068321323722
-      },
-      "message": "Cold Chain Alert - WARNING\nDevice: cold_chain_1\nTime Window: 2024-10-22T10:00:00 to 2024-10-22T10:00:09\n\nConditions:\n- Temperature: mean=8.42\u00b0C (min=8.3, max=8.7)\n- Humidity: mean=65.58% (min=64.8, max=67.0)\n- Anomaly Score: 0.630\n\nATTENTION: Cold chain parameters approaching critical levels."
-    }
-  ]
+  "data": [],
+  "total_task_time": 160.00505096
 }

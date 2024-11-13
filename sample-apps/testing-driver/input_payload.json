@@ -1,28 +1,32 @@
 {
   "data": [
     {
-      "is_anomaly": true,
-      "anomaly_score": 0.630068321323722,
-      "detection_timestamp": "2024-10-29T10:25:02.414917",
-      "device_id": "cold_chain_1",
-      "window_start": "2024-10-22T10:00:00",
-      "window_end": "2024-10-22T10:00:09",
-      "deviations": {
-        "temperature": 3.42,
-        "humidity": 5.58
+      "is_anomaly": false,
+      "anomaly_score": -0.24168199671299367,
+      "model_scores": {
+        "isolation_forest": 0.5158269344498415,
+        "one_class_svm": -0.9991909278758289
       },
-      "stats": {
-        "temperature": {
-          "mean": 8.42,
-          "min": 8.3,
-          "max": 8.7
-        },
-        "humidity": {
-          "mean": 65.58,
-          "min": 64.8,
-          "max": 67.0
+      "model_predictions": {
+        "isolation_forest": 1,
+        "one_class_svm": 1
+      },
+      "detection_timestamp": "2024-11-13T13:34:35.659700",
+      "device_id": "cold_chain_abs123",
+      "window_start": "2024-11-13T13:14:53.763730",
+      "window_end": "2024-11-13T13:15:22.763730",
+      "environmental_stability": 867785.8795266742,
+      "feature_analysis": {
+        "feature_count": 19484,
+        "non_zero_features": 15836,
+        "feature_statistics": {
+          "mean": -2006.9920540813696,
+          "std": 58381.5295909377,
+          "min": -1043414.8715435376,
+          "max": 867785.8795266742
         }
       }
     }
-  ]
+  ],
+  "total_task_time": 160.004840126
 }
