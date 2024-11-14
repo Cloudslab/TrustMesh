@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 SAMPLE_INTERVAL = 1
 WINDOW_SIZE = 30
-SEND_INTERVAL = 300
+SEND_INTERVAL = 30
 
 
 class ColdChainSimulator:
