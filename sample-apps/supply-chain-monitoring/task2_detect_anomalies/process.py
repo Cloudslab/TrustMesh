@@ -60,7 +60,7 @@ class FeatureExtractor:
 
 
 class AnomalyDetector:
-    def __init__(self, n_estimators=100, contamination=0.1):
+    def __init__(self, n_estimators=500, contamination=0.1):
         """Initialize a lightweight anomaly detector"""
         self.feature_extractor = FeatureExtractor()
         self.scaler = StandardScaler()
