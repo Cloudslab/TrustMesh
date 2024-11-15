@@ -32,8 +32,8 @@ docker build -t $DOCKER_USERNAME/docker-image-tp:latest ./auto-docker-deployment
 docker build -t $DOCKER_USERNAME/docker-image-client:latest ./auto-docker-deployment/docker-image-client
 # Build dependency-management-tp image
 docker build -t $DOCKER_USERNAME/dependency-management-tp:latest ./manage-dependency-workflow/dependency-management-tp
-# Build dependency-management-client image
-docker build -t $DOCKER_USERNAME/dependency-management-client:latest ./manage-dependency-workflow/dependency-management-client
+# Build workflow-creation-client image
+docker build -t $DOCKER_USERNAME/workflow-creation-client:latest ./manage-dependency-workflow/workflow-creation-client
 # Build scheduling-request-tp image
 docker build -t $DOCKER_USERNAME/scheduling-request-tp:latest ./scheduling/scheduling-request-tp
 # Build schedule-confirmation-tp image
@@ -53,7 +53,7 @@ docker push $DOCKER_USERNAME/peer-registry-tp:latest
 docker push $DOCKER_USERNAME/docker-image-tp:latest
 docker push $DOCKER_USERNAME/docker-image-client:latest
 docker push $DOCKER_USERNAME/dependency-management-tp:latest
-docker push $DOCKER_USERNAME/dependency-management-client:latest
+docker push $DOCKER_USERNAME/workflow-creation-client:latest
 docker push $DOCKER_USERNAME/scheduling-request-tp:latest
 docker push $DOCKER_USERNAME/schedule-confirmation-tp:latest
 docker push $DOCKER_USERNAME/schedule-status-update-tp:latest

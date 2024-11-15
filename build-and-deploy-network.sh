@@ -874,8 +874,8 @@ items:"
                 - name: VALIDATOR_URL
                   value: \"tcp://sawtooth-0:4004\"
 
-            - name: dependency-management-client
-              image: murtazahr/dependency-management-client:latest
+            - name: workflow-creation-client
+              image: murtazahr/workflow-creation-client:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://sawtooth-0:4004\"
