@@ -7,31 +7,19 @@ TEST_APP_DIR=$(pwd)/sample-apps
 DOCKER_USERNAME=murtazahr
 
 # Building docker image for test docker applications
-cd "$TEST_APP_DIR/arrhythmia-detection" || exit
-docker build -t arrhythmia-detection:latest -f Dockerfile .
-
-cd "$TEST_APP_DIR/object-detection/task1_object_detection" || exit
-docker build -t yolo-object-detection:latest -f Dockerfile .
-
-cd "$TEST_APP_DIR/object-detection/task2_output_image_generation" || exit
-docker build -t bounding-box-image-generation:latest -f Dockerfile .
-
-cd "$TEST_APP_DIR/supply-chain-monitoring/task1_process_sensor_data" || exit
+cd "$TEST_APP_DIR/cold-chain-monitoring/task1_process_sensor_data" || exit
 docker build -t process-sensor-data:latest -f Dockerfile .
 
-cd "$TEST_APP_DIR/supply-chain-monitoring/task2_detect_anomalies" || exit
+cd "$TEST_APP_DIR/cold-chain-monitoring/task2_detect_anomalies" || exit
 docker build -t anomaly-detection:latest -f Dockerfile .
 
-cd "$TEST_APP_DIR/supply-chain-monitoring/task3_generate_alerts" || exit
+cd "$TEST_APP_DIR/cold-chain-monitoring/task3_generate_alerts" || exit
 docker build -t generate-alerts:latest -f Dockerfile .
 
 # Make sure user is in the correct working directory
 cd "$WORK_DIR" || exit
 
 # Export test docker application
-docker save -o auto-docker-deployment/docker-image-client/arrhythmia-detection.tar arrhythmia-detection
-docker save -o auto-docker-deployment/docker-image-client/yolo-object-detection.tar yolo-object-detection
-docker save -o auto-docker-deployment/docker-image-client/bounding-box-image-generation.tar bounding-box-image-generation
 docker save -o auto-docker-deployment/docker-image-client/process-sensor-data.tar process-sensor-data
 docker save -o auto-docker-deployment/docker-image-client/anomaly-detection.tar anomaly-detection
 docker save -o auto-docker-deployment/docker-image-client/generate-alerts.tar generate-alerts
