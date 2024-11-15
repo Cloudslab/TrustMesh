@@ -11,12 +11,12 @@ def load_and_prepare_data(csv_path):
 
     return df
 
-def analyze_fog_nodes_by_os(df):
-    # Filter fog nodes
-    fog_nodes = df[df['node_name'].str.contains('fog-node')]
+def analyze_compute_nodes_by_os(df):
+    # Filter compute nodes
+    compute_nodes = df[df['node_name'].str.contains('compute-node')]
 
     # Group by OS and calculate mean resource usage
-    os_stats = fog_nodes.groupby('os_image').agg({
+    os_stats = compute_nodes.groupby('os_image').agg({
         'cpu_usage_percent': 'mean',
         'memory_usage_percent': 'mean'
     }).round(2)
@@ -47,25 +47,25 @@ def analyze_iot_nodes_by_os(df):
 
     return iot_os_stats
 
-def plot_resource_usage(fog_stats, iot_stats, console_stats):
+def plot_resource_usage(compute_stats, iot_stats, console_stats):
     # Set up the style
     plt.style.use('seaborn')
 
     # Create figure with subplots
     fig = plt.figure(figsize=(15, 10))
 
-    # Fog nodes plot
+    # compute nodes plot
     plt.subplot(2, 1, 1)
-    x = range(len(fog_stats.index))
+    x = range(len(compute_stats.index))
     width = 0.35
 
-    plt.bar(x, fog_stats['cpu_usage_percent'], width, label='CPU Usage %', color='skyblue')
-    plt.bar([i + width for i in x], fog_stats['memory_usage_percent'], width, label='Memory Usage %', color='lightcoral')
+    plt.bar(x, compute_stats['cpu_usage_percent'], width, label='CPU Usage %', color='skyblue')
+    plt.bar([i + width for i in x], compute_stats['memory_usage_percent'], width, label='Memory Usage %', color='lightcoral')
 
     plt.xlabel('Operating System')
     plt.ylabel('Usage Percentage')
-    plt.title('Fog Nodes Resource Usage by OS')
-    plt.xticks([i + width/2 for i in x], fog_stats.index, rotation=45, ha='right')
+    plt.title('compute Nodes Resource Usage by OS')
+    plt.xticks([i + width/2 for i in x], compute_stats.index, rotation=45, ha='right')
     plt.legend()
 
     # IoT nodes plot
@@ -93,13 +93,13 @@ def main():
     df = load_and_prepare_data('monitoring/node_metrics_20241108_014938.csv')
 
     # Analyze data
-    fog_stats = analyze_fog_nodes_by_os(df)
+    compute_stats = analyze_compute_nodes_by_os(df)
     console_stats = analyze_client_console(df)
     iot_stats = analyze_iot_nodes_by_os(df)
 
     # Print statistics
-    print("\nFog Nodes Resource Usage by OS:")
-    print(fog_stats)
+    print("\ncompute Nodes Resource Usage by OS:")
+    print(compute_stats)
     print("\nClient Console Average Resource Usage:")
     print(f"CPU: {console_stats['cpu_usage']:.2f}%")
     print(f"Memory: {console_stats['memory_usage']:.2f}%")
@@ -107,7 +107,7 @@ def main():
     print(iot_stats)
 
     # Plot the results
-    plot_resource_usage(fog_stats, iot_stats, console_stats)
+    plot_resource_usage(compute_stats, iot_stats, console_stats)
 
 
 if __name__ == "__main__":

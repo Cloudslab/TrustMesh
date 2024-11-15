@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def get_max_node_id():
     node_id = os.getenv('NODE_ID', '')
-    match = re.search(r'sawtooth-fog-node-(\d+)', node_id)
+    match = re.search(r'sawtooth-compute-node-(\d+)', node_id)
     if match:
         return int(match.group(1))
     else:

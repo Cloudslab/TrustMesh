@@ -26,26 +26,26 @@ create_redis_password_secret() {
     kubectl create secret generic redis-password --from-literal=password=$redis_password
 }
 
-# Function to generate fog node names based on count
-generate_fog_nodes() {
+# Function to generate compute node names based on count
+generate_compute_nodes() {
     local num_nodes=$1
     for i in $(seq 1 $num_nodes); do
-        echo "fog-node-$i"
+        echo "compute-node-$i"
     done
 }
 
-# Function to randomly select unique fog nodes
-select_unique_fog_nodes() {
+# Function to randomly select unique compute nodes
+select_unique_compute_nodes() {
     local num_redis_nodes=$1
-    local total_fog_nodes=$2
+    local total_compute_nodes=$2
 
-    if [ $total_fog_nodes -lt $num_redis_nodes ]; then
-        echo "Error: Not enough fog nodes available. Found $total_fog_nodes, need $num_redis_nodes." >&2
+    if [ $total_compute_nodes -lt $num_redis_nodes ]; then
+        echo "Error: Not enough compute nodes available. Found $total_compute_nodes, need $num_redis_nodes." >&2
         exit 1
     fi
 
-    local fog_nodes=($(generate_fog_nodes $total_fog_nodes))
-    shuf -e "${fog_nodes[@]}" | head -n $num_redis_nodes
+    local compute_nodes=($(generate_compute_nodes $total_compute_nodes))
+    shuf -e "${compute_nodes[@]}" | head -n $num_redis_nodes
 }
 
 generate_redis_cluster_yaml() {
@@ -214,17 +214,17 @@ check_cluster_status() {
     return 1
 }
 
-# Check if number of fog nodes argument is provided
+# Check if number of compute nodes argument is provided
 if [ $# -ne 1 ]; then
-    echo "Usage: $0 <number_of_fog_nodes>"
+    echo "Usage: $0 <number_of_compute_nodes>"
     exit 1
 fi
 
-total_fog_nodes=$1
+total_compute_nodes=$1
 
 # Validate input is a positive integer
-if ! [[ "$total_fog_nodes" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Error: Please provide a positive integer for the number of fog nodes."
+if ! [[ "$total_compute_nodes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: Please provide a positive integer for the number of compute nodes."
     exit 1
 fi
 
@@ -238,12 +238,12 @@ redis_password=$(generate_password)
 create_redis_password_secret "$redis_password"
 
 # Calculate the number of Redis nodes (minimum 4, maximum 10)
-num_redis_nodes=$(( total_fog_nodes > 10 ? 10 : total_fog_nodes ))
+num_redis_nodes=$(( total_compute_nodes > 10 ? 10 : total_compute_nodes ))
 echo "Number of Redis nodes to be created: $num_redis_nodes"
 
-# Randomly select from all available fog nodes
-readarray -t selected_nodes < <(select_unique_fog_nodes $num_redis_nodes $total_fog_nodes)
-echo "Selected fog nodes: ${selected_nodes[*]}"
+# Randomly select from all available compute nodes
+readarray -t selected_nodes < <(select_unique_compute_nodes $num_redis_nodes $total_compute_nodes)
+echo "Selected compute nodes: ${selected_nodes[*]}"
 
 # Generate and apply the Redis Cluster YAML
 generate_redis_cluster_yaml $num_redis_nodes "$redis_password" "${selected_nodes[@]}" > kubernetes-manifests/generated/redis-cluster.yaml

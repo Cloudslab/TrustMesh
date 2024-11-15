@@ -99,14 +99,14 @@ EOF
 }
 
 generate_couchdb_yaml() {
-    local num_fog_nodes=$1
+    local num_compute_nodes=$1
     local yaml_content="apiVersion: v1
 kind: List
 
 items:"
 
     # Generate PVCs
-    for ((i=0; i<num_fog_nodes; i++)); do
+    for ((i=0; i<num_compute_nodes; i++)); do
         yaml_content+="
   - apiVersion: v1
     kind: PersistentVolumeClaim
@@ -121,7 +121,7 @@ items:"
     done
 
     # Generate Deployments
-    for ((i=0; i<num_fog_nodes; i++)); do
+    for ((i=0; i<num_compute_nodes; i++)); do
         yaml_content+="
   - apiVersion: apps/v1
     kind: Deployment
@@ -138,7 +138,7 @@ items:"
             app: couchdb-${i}
         spec:
           nodeSelector:
-            kubernetes.io/hostname: fog-node-$((i+1))
+            kubernetes.io/hostname: compute-node-$((i+1))
           initContainers:
             - name: init-config
               image: busybox
@@ -196,7 +196,7 @@ items:"
     done
 
     # Generate Services
-    for ((i=0; i<num_fog_nodes; i++)); do
+    for ((i=0; i<num_compute_nodes; i++)); do
         yaml_content+="
   - apiVersion: v1
     kind: Service
@@ -215,7 +215,7 @@ items:"
           targetPort: 6984"
     done
 
-    for ((i=0; i<num_fog_nodes; i++)); do
+    for ((i=0; i<num_compute_nodes; i++)); do
     # Generate ConfigMap for CouchDB configuration
     yaml_content+="
   - apiVersion: v1
@@ -280,7 +280,7 @@ items:"
                 - -c
                 - |
                   echo \"Starting CouchDB cluster setup\" &&
-                  for i in \$(seq 0 $((num_fog_nodes-1))); do
+                  for i in \$(seq 0 $((num_compute_nodes-1))); do
                     echo \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${i}.default.svc.cluster.local:6984\"
                     until curl --cacert /certs/ca.crt --cert /certs/node\${i}_crt --key /certs/node\${i}_key -s \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${i}.default.svc.cluster.local:6984\" > /dev/null; do
                       echo \"Waiting for CouchDB on couchdb-\${i} to be ready...\"
@@ -289,8 +289,8 @@ items:"
                     echo \"CouchDB on couchdb-\${i} is ready\"
                   done &&
                   echo \"Adding nodes to the cluster\" &&
-                  for num in \$(seq 1 $((num_fog_nodes-1))); do
-                    response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_fog_nodes\\\", \\\"remote_node\\\": \\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"remote_current_user\\\": \\\"\${COUCHDB_USER}\\\", \\\"remote_current_password\\\": \\\"\${COUCHDB_PASSWORD}\\\" }\")
+                  for num in \$(seq 1 $((num_compute_nodes-1))); do
+                    response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\", \\\"remote_node\\\": \\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"remote_current_user\\\": \\\"\${COUCHDB_USER}\\\", \\\"remote_current_password\\\": \\\"\${COUCHDB_PASSWORD}\\\" }\")
                     echo \"Enable cluster on couchdb-\${num} response: \${response}\"
                     response=\$(curl -s -X POST -H 'Content-Type: application/json' \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_cluster_setup\" -d \"{\\\"action\\\": \\\"add_node\\\", \\\"host\\\":\\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"port\\\": 5984, \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\"}\")
                     echo \"Adding node couchdb-\${num} response: \${response}\"
@@ -308,7 +308,7 @@ items:"
                   echo \"Creating \${TASK_DATA_DB} on couchdb-0 response: \${response}\" &&
                   echo \"Waiting for \${RESOURCE_REGISTRY_DB} & \${TASK_DATA_DB} to be available on all nodes\" &&
                   for db in \${RESOURCE_REGISTRY_DB} \${TASK_DATA_DB}; do
-                    for i in \$(seq 0 $((num_fog_nodes-1))); do
+                    for i in \$(seq 0 $((num_compute_nodes-1))); do
                       until curl --cacert /certs/ca.crt --cert /certs/node\${i}_crt --key /certs/node\${i}_key -s \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${i}.default.svc.cluster.local:6984/\${db}\" | grep -q \"\${db}\"; do
                         echo \"Waiting for \${db} on couchdb-\${i}...\"
                         sleep 5
@@ -345,16 +345,16 @@ items:"
 
 # Function to generate blockchain network deployment YAML
 generate_blockchain_network_yaml() {
-    local num_fog_nodes=$1
+    local num_compute_nodes=$1
     local num_iot_nodes=$2
     local yaml_content="apiVersion: v1
 kind: List
 
 items:"
 
-    # Generate Fog Node Deployments and Services
-    for ((i=0; i<num_fog_nodes; i++)); do
-        local hostname="fog-node-$((i+1))"
+    # Generate compute Node Deployments and Services
+    for ((i=0; i<num_compute_nodes; i++)); do
+        local hostname="compute-node-$((i+1))"
         local deployment_name="pbft-$i"
         local service_name="sawtooth-$i"
 
@@ -398,7 +398,7 @@ items:"
                 - '-c'
                 - |
                   for db in \${RESOURCE_REGISTRY_DB} \${TASK_DATA_DB}; do
-                    for i in \$(seq 0 $((num_fog_nodes-1))); do
+                    for i in \$(seq 0 $((num_compute_nodes-1))); do
                       until curl --cacert /certs/ca.crt --cert /certs/node\${i}_crt --key /certs/node\${i}_key -s \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${i}.default.svc.cluster.local:6984/\${db}\" | grep -q \"\${db}\"; do
                         echo \"Waiting for \${db} on couchdb-\${i}...\"
                         sleep 5
@@ -581,9 +581,9 @@ items:"
                 - -c
                 - \"sawtooth keygen && tail -f /dev/null\"
 
-            - name: fog-node
+            - name: compute-node
               resources: {}
-              image: murtazahr/fog-node:latest
+              image: murtazahr/compute-node:latest
               securityContext:
                 privileged: true
               volumeMounts:
@@ -599,7 +599,7 @@ items:"
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
                 - name: NODE_ID
-                  value: \"sawtooth-fog-node-$i\"
+                  value: \"sawtooth-compute-node-$i\"
                 - name: COUCHDB_HOST
                   value: \"couchdb-$i.default.svc.cluster.local:6984\"
                 - name: RESOURCE_UPDATE_INTERVAL
@@ -665,9 +665,9 @@ items:"
                   containerPort: 8800"
 
         if [ "$i" -eq 0 ]; then
-            local pbft_members=$(for ((j=0; j<num_fog_nodes; j++)); do
+            local pbft_members=$(for ((j=0; j<num_compute_nodes; j++)); do
                 echo -n "\\\"\$pbft${j}pub\\\""
-                if [ $j -lt $((num_fog_nodes-1)) ]; then
+                if [ $j -lt $((num_compute_nodes-1)) ]; then
                     echo -n ","
                 fi
             done)
@@ -822,7 +822,7 @@ items:"
               image: murtazahr/iot-node:latest
               env:
                 - name: VALIDATOR_URLS
-                  value: \"$(for ((j=0; j<num_fog_nodes; j++)); do echo -n "tcp://sawtooth-$j:4004"; if [ $j -lt $((num_fog_nodes-1)) ]; then echo -n ,; fi; done)\"
+                  value: \"$(for ((j=0; j<num_compute_nodes; j++)); do echo -n "tcp://sawtooth-$j:4004"; if [ $j -lt $((num_compute_nodes-1)) ]; then echo -n ,; fi; done)\"
                 - name: IOT_URL
                   value: \"tcp://$service_name\"
 
@@ -890,21 +890,21 @@ items:"
 }
 
 # Main script starts here
-echo "Enter the number of fog nodes:"
-read num_fog_nodes
+echo "Enter the number of compute nodes:"
+read num_compute_nodes
 echo "Enter the number of IoT nodes:"
 read num_iot_nodes
 
 # Part 1: Verify inputs and check node existence
-if [ "$num_fog_nodes" -lt 3 ]; then
-    echo "Error: The number of fog nodes must be at least 3."
+if [ "$num_compute_nodes" -lt 3 ]; then
+    echo "Error: The number of compute nodes must be at least 3."
     exit 1
 fi
 
-echo "Checking for fog nodes..."
-for ((i=1; i<=num_fog_nodes; i++)); do
-    if ! check_node_exists "fog-node-$i"; then
-        echo "Error: fog-node-$i does not exist in the cluster."
+echo "Checking for compute nodes..."
+for ((i=1; i<=num_compute_nodes; i++)); do
+    if ! check_node_exists "compute-node-$i"; then
+        echo "Error: compute-node-$i does not exist in the cluster."
         exit 1
     fi
 done
@@ -920,13 +920,13 @@ done
 echo "All required nodes are present in the cluster."
 
 # Generate SSL/TLS certificates
-generate_ssl_certificates "$num_fog_nodes"
+generate_ssl_certificates "$num_compute_nodes"
 generate_network_key_zmq
 
 # Part 2: Create redis cluster
 mkdir -p kubernetes-manifests/generated
 
-/bin/bash ./redis-setup.sh "$num_fog_nodes"
+/bin/bash ./redis-setup.sh "$num_compute_nodes"
 
 # Part 3: Generate YAML file for config and secrets
 # Create the PBFT key generation job YAML
@@ -948,7 +948,7 @@ spec:
             - bash
           args:
             - -c
-            - "for i in {0..$(($num_fog_nodes-1))}; do sawadm keygen -q pbft\${i}; done && cd /etc/sawtooth/keys/ && grep '' * | sed 's/\\\\.//' | sed 's/:/:\ /'"
+            - "for i in {0..$(($num_compute_nodes-1))}; do sawadm keygen -q pbft\${i}; done && cd /etc/sawtooth/keys/ && grep '' * | sed 's/\\\\.//' | sed 's/:/:\ /'"
       restartPolicy: Never
   backoffLimit: 4
 EOF
@@ -995,7 +995,7 @@ $indented_keys
       name: couchdb-secrets
     type: Opaque
     stringData:
-      COUCHDB_USER: fogbus
+      COUCHDB_USER: trustmesh
       COUCHDB_PASSWORD: mwg478jR04vAonMu2QnFYF3sVyVKUujYrGrzVsrq3I
       COUCHDB_SECRET: LEv+K7x24ITqcAYp0R0e1GzBqiE98oSSarPD1sdeOyM=
 
@@ -1012,7 +1012,7 @@ EOF
 echo "Generated YAML file for config and secrets has been saved to kubernetes-manifests/generated/config-and-secrets.yaml"
 
 # Part 4: Generate CouchDB cluster deployment YAML
-couchdb_yaml=$(generate_couchdb_yaml "$num_fog_nodes")
+couchdb_yaml=$(generate_couchdb_yaml "$num_compute_nodes")
 
 # Save the generated CouchDB YAML to a file
 echo "$couchdb_yaml" > kubernetes-manifests/generated/couchdb-cluster-deployment.yaml
@@ -1020,7 +1020,7 @@ echo "$couchdb_yaml" > kubernetes-manifests/generated/couchdb-cluster-deployment
 echo "Generated CouchDB cluster deployment YAML has been saved to kubernetes-manifests/generated/couchdb-cluster-deployment.yaml"
 
 # Part 5: Generate blockchain network deployment YAML
-blockchain_network_yaml=$(generate_blockchain_network_yaml "$num_fog_nodes" "$num_iot_nodes")
+blockchain_network_yaml=$(generate_blockchain_network_yaml "$num_compute_nodes" "$num_iot_nodes")
 
 # Save the generated blockchain network YAML to a file
 echo "$blockchain_network_yaml" > kubernetes-manifests/generated/blockchain-network-deployment.yaml

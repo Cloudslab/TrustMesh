@@ -33,7 +33,7 @@
    ```
 
    **Naming Convention:**
-    - Fog nodes: `fog-node-1`, `fog-node-2`, etc.
+    - Compute nodes: `compute-node-1`, `compute-node-2`, etc.
     - IoT nodes: `iot-node-1`, `iot-node-2`, etc.
 
    > **Note:** Ensure you follow the naming convention in a serialized manner.

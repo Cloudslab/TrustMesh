@@ -44,8 +44,8 @@ docker build -t $DOCKER_USERNAME/schedule-status-update-tp:latest ./scheduling/s
 docker build -t $DOCKER_USERNAME/iot-data-tp:latest ./scheduling/iot-data-tp
 # Build iot-node image
 docker build -t $DOCKER_USERNAME/iot-node:latest ./iot-node
-# Build fog-node image
-docker build -t $DOCKER_USERNAME/fog-node:latest ./fog-node
+# Build compute-node image
+docker build -t $DOCKER_USERNAME/compute-node:latest ./compute-node
 
 
 # Push images to Docker Hub
@@ -58,7 +58,7 @@ docker push $DOCKER_USERNAME/scheduling-request-tp:latest
 docker push $DOCKER_USERNAME/schedule-confirmation-tp:latest
 docker push $DOCKER_USERNAME/schedule-status-update-tp:latest
 docker push $DOCKER_USERNAME/iot-data-tp:latest
-docker push $DOCKER_USERNAME/fog-node:latest
+docker push $DOCKER_USERNAME/compute-node:latest
 docker push $DOCKER_USERNAME/iot-node:latest
 
 echo "Images built and pushed to registry successfully"
