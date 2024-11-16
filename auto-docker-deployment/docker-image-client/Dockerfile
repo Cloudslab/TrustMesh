@@ -40,9 +40,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY docker_image_client.py .
 
 # Copy tar file
-COPY arrhythmia-detection.tar .
-COPY yolo-object-detection.tar .
-COPY bounding-box-image-generation.tar .
 COPY process-sensor-data.tar .
 COPY anomaly-detection.tar .
 COPY generate-alerts.tar .

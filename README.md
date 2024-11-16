@@ -23,7 +23,6 @@ The framework has been extensively tested on Ubuntu machines but should support 
 * Docker
 * K3S Kubernetes Cluster (Instructions to Set-up provided below)
 * Python 3.8
-* GIT LFS
 
 ### System Requirements
 
@@ -144,7 +143,7 @@ The `app_requirements.json` file specifies resource requirements for your applic
 - The `application.tar` file is generated automatically when running `build-project.sh`
 - For a complete list of supported commands, run:
   ```bash
-  python docker_image_client.py --help
+  python docker_image_client.py
   ```
 
 #### Troubleshooting
