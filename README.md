@@ -80,6 +80,9 @@ chmod +x build-project.sh && ./build-project.sh
 
 #### 3.2 Deploy the Network
 
+**Prerequisites:**
+- Update the image urls for the containers based on your `DOCKER_USERNAME`
+
 After successful image building, deploy the network:
 
 ```bash
