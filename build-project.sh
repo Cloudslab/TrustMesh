@@ -4,7 +4,7 @@
 
 WORK_DIR=$(pwd)
 TEST_APP_DIR=$(pwd)/sample-apps
-DOCKER_USERNAME=murtazahr
+DOCKER_USERNAME=****
 
 # Building docker image for test docker applications
 cd "$TEST_APP_DIR/cold-chain-monitoring/task1_process_sensor_data" || exit

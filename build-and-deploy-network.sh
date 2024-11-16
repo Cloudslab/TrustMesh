@@ -427,7 +427,7 @@ items:"
                   mountPath: /certs
           containers:
             - name: peer-registry-tp
-              image: murtazahr/peer-registry-tp:latest
+              image: ****/peer-registry-tp:latest
               env:
                 - name: MAX_UPDATES_PER_NODE
                   value: \"100\"
@@ -435,25 +435,25 @@ items:"
                   value: \"tcp://$service_name:4004\"
 
             - name: docker-image-tp
-              image: murtazahr/docker-image-tp:latest
+              image: ****/docker-image-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
 
             - name: dependency-management-tp
-              image: murtazahr/dependency-management-tp:latest
+              image: ****/dependency-management-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
 
             - name: schedule-status-update-tp
-              image: murtazahr/schedule-status-update-tp:latest
+              image: ****/schedule-status-update-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
 
             - name: iot-data-tp
-              image: murtazahr/iot-data-tp:latest
+              image: ****/iot-data-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
@@ -506,7 +506,7 @@ items:"
                       key: ca.crt
 
             - name: scheduling-request-tp
-              image: murtazahr/scheduling-request-tp:latest
+              image: ****/scheduling-request-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
@@ -532,7 +532,7 @@ items:"
                       key: ca.crt
 
             - name: schedule-confirmation-tp
-              image: murtazahr/schedule-confirmation-tp:latest
+              image: ****/schedule-confirmation-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
@@ -583,7 +583,7 @@ items:"
 
             - name: compute-node
               resources: {}
-              image: murtazahr/compute-node:latest
+              image: ****/compute-node:latest
               securityContext:
                 privileged: true
               volumeMounts:
@@ -819,7 +819,7 @@ items:"
             kubernetes.io/hostname: iot-node-$((i+1))
           containers:
             - name: iot-node
-              image: murtazahr/iot-node:latest
+              image: ****/iot-node:latest
               env:
                 - name: VALIDATOR_URLS
                   value: \"$(for ((j=0; j<num_compute_nodes; j++)); do echo -n "tcp://sawtooth-$j:4004"; if [ $j -lt $((num_compute_nodes-1)) ]; then echo -n ,; fi; done)\"
@@ -865,7 +865,7 @@ items:"
             kubernetes.io/hostname: client-console
           containers:
             - name: application-deployment-client
-              image: murtazahr/docker-image-client:latest
+              image: ****/docker-image-client:latest
               securityContext:
                 privileged: true
               env:
@@ -875,13 +875,13 @@ items:"
                   value: \"tcp://sawtooth-0:4004\"
 
             - name: workflow-creation-client
-              image: murtazahr/workflow-creation-client:latest
+              image: ****/workflow-creation-client:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://sawtooth-0:4004\"
 
             - name: scheduling-client
-              image: murtazahr/scheduling-client:latest
+              image: ****/scheduling-client:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://sawtooth-0:4004\""

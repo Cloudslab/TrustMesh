@@ -38,8 +38,7 @@ Based on our experimental evaluation:
 First, clone the TrustMesh repository and navigate to the project directory:
 
 ```bash
-git clone https://github.com/murtazahr/TrustMesh.git
-cd trustmesh
+git clone https://github.com/****/****.git
 ```
 
 ### 2. Set Up K3S Cluster
@@ -251,12 +250,3 @@ If you use TrustMesh in your research, please cite:
 ```
 [Citation information to be added]
 ```
-
-## Authors
-
-- Murtaza Rangwala - [Email](mailto:murtazahatimr@icloud.com)
-- Rajkumar Buyya - [Email](mailto:rbuyya@unimelb.edu.au)
-
-Cloud Computing and Distributed Systems (CLOUDS) Laboratory  
-School of Computing and Information Systems  
-The University of Melbourne, Australia
