@@ -249,7 +249,15 @@ This project is licensed under the GNU General Public License - see the [LICENSE
 
 If you use TrustMesh in your research, please cite:
 ```
-[Citation information to be added]
+@misc{rangwala2024trustmeshblockchainenabledtrusteddistributed,
+      title={TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments}, 
+      author={Murtaza Rangwala and Rajkumar Buyya},
+      year={2024},
+      eprint={2411.13039},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2411.13039}, 
+}
 ```
 
 ## Authors
