@@ -56,9 +56,19 @@ class IoTScheduleTransactionHandler(TransactionHandler):
 
         logger.info(f"Workflow ID: {workflow_id}, Schedule ID: {schedule_id}, Schedule Proposer: {schedule_proposer}")
 
+        # Create the schedule address
+        schedule_address = self._make_schedule_address(schedule_id)
+
+        # Check if the schedule address already exists in the state
+        existing_state = context.get_state([schedule_address])
+
+        if existing_state:
+            # If a state already exists at this address, raise an InvalidTransaction
+            logger.warning(f"Schedule {schedule_id} already exists. Rejecting duplicate.")
+            raise InvalidTransaction(f"Schedule {schedule_id} has already been confirmed.")
+
         logger.info("Confirming schedule")
 
-        schedule_address = self._make_schedule_address(schedule_id)
         schedule_data = {
             'workflow_id': workflow_id,
             'schedule_id': schedule_id,
