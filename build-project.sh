@@ -3,26 +3,10 @@
 # Main script content starts here
 
 WORK_DIR=$(pwd)
-TEST_APP_DIR=$(pwd)/sample-apps
 DOCKER_USERNAME=murtazahr
-
-# Building docker image for test docker applications
-cd "$TEST_APP_DIR/cold-chain-monitoring/task1_process_sensor_data" || exit
-docker build -t process-sensor-data:latest -f Dockerfile .
-
-cd "$TEST_APP_DIR/cold-chain-monitoring/task2_detect_anomalies" || exit
-docker build -t anomaly-detection:latest -f Dockerfile .
-
-cd "$TEST_APP_DIR/cold-chain-monitoring/task3_generate_alerts" || exit
-docker build -t generate-alerts:latest -f Dockerfile .
 
 # Make sure user is in the correct working directory
 cd "$WORK_DIR" || exit
-
-# Export test docker application
-docker save -o auto-docker-deployment/docker-image-client/process-sensor-data.tar process-sensor-data
-docker save -o auto-docker-deployment/docker-image-client/anomaly-detection.tar anomaly-detection
-docker save -o auto-docker-deployment/docker-image-client/generate-alerts.tar generate-alerts
 
 # Build peer-registry-tp image
 docker build -t $DOCKER_USERNAME/peer-registry-tp:latest ./peer-registry/peer-registry-tp
