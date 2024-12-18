@@ -13,13 +13,21 @@
    ```bash
    ./setup-k3s-server.sh
    ```
-   **Important:** Take note of the `K3S_TOKEN` and `K3S_URL` output. You'll need these for agent setup.
-
+   
 4. Apply the changes to your current session:
    ```bash
    source ~/.bashrc
    ```
-   Alternatively, open a new shell to access kubectl commands without sudo.
+   
+5. Get the `K3S_TOKEN`:
+   ```bash
+   sudo cat /var/lib/rancher/k3s/server/node-token
+   ```
+6. Get the `K3S_URL`:
+   ```bash
+   echo https://$(kubectl get nodes -o jsonpath='{range .items[*]}{@.metadata.name}{"\t"}{@.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' | grep "client-console" | awk '{print $2}'):6443
+   ```
+   **Important:** Take note of the `K3S_TOKEN` and `K3S_URL` output. You'll need these for agent setup.
 
 ## 2. K3S Agent Setup
 
