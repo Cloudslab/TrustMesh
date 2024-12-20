@@ -264,7 +264,7 @@ If you use TrustMesh in your research, please cite:
 
 ## Authors
 
-- Murtaza Rangwala - [Email](mailto:murtazahatimr@icloud.com)
+- Murtaza Rangwala - [Email](mailto:mrangwala@student.unimelb.edu.au)
 - Rajkumar Buyya - [Email](mailto:rbuyya@unimelb.edu.au)
 
 Cloud Computing and Distributed Systems (CLOUDS) Laboratory  
