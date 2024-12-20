@@ -22,7 +22,7 @@ A minimum of 6 nodes are required to deploy the framework. These may be virtual 
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/murtazahr/TrustMesh.git
+git clone https://github.com/Cloudslab/TrustMesh.git
 cd trustmesh
 ```
 
