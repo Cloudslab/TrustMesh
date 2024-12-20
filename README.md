@@ -30,8 +30,14 @@ As specified in the `INSTALL.md`, a minimum of 6 nodes are required for testing 
 
 Based on our experimental evaluation with a 21-node testbed and the cold-chain application:
 - Request Round Trip (RRT) time: 33.54 - 36.34 seconds
-- Framework Overhead: 3.25 - 4.19 seconds
+- Framework Overhead (FO): 3.25 - 4.19 seconds
 - Scales effectively up to 16 computation nodes
+
+You can calculate FO by taking the difference of the time taken to receive the results after sending the request and the total task time in the response payload. For example:
+
+![img.png](sample-apps/documentation-supplements/img.png)
+
+For this request: FO = (58.537 - 44.064) - 11.059 = 3.414 seconds
 
 > **Note:** Please keep in mind that we used several versions of the cold-chain anomaly detection application with varying computational requirements to attain these results. Only one of those variations is included in this project so your Request Roundtrip Time (RRT) may vary. However, you should find that the Framework Overhead (FO) remains the same. Feel free to update `sample-apps/cold-chain-monitoring/task2_detect-anomalies/process.py` with a new default value for `n_samples` to test with varying computational demand.
 

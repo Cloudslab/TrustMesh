@@ -23,7 +23,8 @@ A minimum of 6 nodes are required to deploy the framework. These may be virtual 
 ### 1. Clone Repository
 ```bash
 git clone https://github.com/Cloudslab/TrustMesh.git
-cd trustmesh
+cd TrustMesh
+git switch -c artifact-eval origin/artifact-evaluation
 ```
 
 ### 2. Set Up K3S Cluster
@@ -56,7 +57,7 @@ Perform all operations from this step onwards on the server node of the k3s clus
 1. Update DOCKER_USERNAME in build-project.sh with your username
 2. Login to Docker:
    ```bash
-   docker login
+   docker login -u <username>
    ```
 3. Build images:
    ```bash
@@ -72,29 +73,30 @@ Perform all operations from this step onwards on the server node of the k3s clus
    ```bash
    kubectl get pods
    ```
-   All pods should show "Running" status within 2-3 minutes.
+   All pods except `couchdb-setup-xxxxx` should show "Running" status within a few minutes.
 
 
 ## Basic Usage Example
 
 1. Deploy the cold-chain use-case applications:
    ```bash
-   kubectl exec -it network-management-console-xxxxx -c application-deployment-client bash
+   kubectl exec -it network-management-console-xxxxx -c application-deployment-client -- bash
    python docker_image_client.py deploy_image process-sensor-data.tar app_requirements.json
    python docker_image_client.py deploy_image anomaly-detection.tar app_requirements.json
    python docker_image_client.py deploy_image generate-alerts.tar app_requirements.json
    ```
 
-* A sample `app_requirements.json` is provided in the `sample-apps/sample-jsons` directory. You may use that.
+* A sample `app_requirements.json` is provided in the `sample-apps/sample-jsons` directory. You may use that or create one yourself using a cmd line text editor (eg. nano, vim)
 * After each application's deployment, a unique application ID will be printed to the console. Save that for the later steps.
+* After you log the application ID, you may have to Ctrl+C to get back access to the terminal.
 
 2. Create test workflow:
    ```bash
-   kubectl exec -it network-management-console-xxxxx -c workflow-creation-client bash
-   python workflow_creation_client.py test_graph.json
+   kubectl exec -it network-management-console-xxxxx -c workflow-creation-client -- bash
+   python workflow_creation_client.py dependency_graph.json
    ```
    
-* The `test_graph.json` file specifies the workflow as a DAG where each node is an application and edges represent the flow of data or order of execution. For the cold-chain usecase, your json should be as follows:
+* The `dependency_graph.json` file specifies the workflow as a DAG where each node is an application and edges represent the flow of data or order of execution. For the cold-chain usecase, your json should be as follows:
 
 ```json
 {
@@ -106,11 +108,12 @@ Perform all operations from this step onwards on the server node of the k3s clus
    }
 }
 ```
+* A sample `dependency_graph.json` is provided in the sample-apps/sample-jsons directory.
 * A workflow ID will be printed to the console on successful creation of workflow. Record that for the next step.
 
 3. Initiate Data Processing Requests from IoT node:
    ```bash
-   kubectl exec -it iot-0-xxxxx -c iot-node bash
+   kubectl exec -it iot-0-xxxxx -c iot-node -- bash
    python cold-chain-data-simulation.py <workflowID>
    ```
 
