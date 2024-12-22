@@ -2,7 +2,7 @@
 
 ## 1. K3S Server Setup
 
-1. Locate the `setup-k3s-server.sh` script in the current directory.
+1. In the first of your 6 nodes, locate the `setup-k3s-server.sh` script in the current directory.
 
 2. Grant execution permission to the script:
    ```bash
@@ -31,7 +31,7 @@
 
 ## 2. K3S Agent Setup
 
-1. Locate the `setup-k3s-agent.sh` script in the current directory.
+1. In rest of the 5 nodes, locate the `setup-k3s-agent.sh` script in the current directory.
 2. Update the following environment variables in the script:
 
    ```bash
@@ -44,7 +44,7 @@
     - Compute nodes: `compute-node-1`, `compute-node-2`, etc.
     - IoT nodes: `iot-node-1`, `iot-node-2`, etc.
 
-   > **Note:** Ensure you follow the naming convention in a serialized manner.
+   > **Note:** Ensure you follow the naming convention in a serialized manner. 4 of the nodes should be compute nodes and 1 should be an IoT node.
 
 3. Grant execution permission to the script:
    ```bash
