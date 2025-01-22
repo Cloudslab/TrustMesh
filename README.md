@@ -1,7 +1,5 @@
 # TrustMesh
 
-> **Important Note for Artifact Reviewers**: Please use the `artifact-evaluation` branch
-
 TrustMesh is a blockchain-enabled distributed computing framework designed for trustless heterogeneous IoT environments. It implements a novel three-layer architecture combining permissioned blockchain technology with a multi-phase Practical Byzantine Fault Tolerance (PBFT) consensus based protocol for scheduling decisions.
 
 ## Key Features
