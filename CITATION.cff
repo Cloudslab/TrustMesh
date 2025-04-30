@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use or reference this work, please cite it using the metadata below."
+title: "TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments"
+authors:
+  - family-names: Rangwala
+    given-names: Murtaza
+  - family-names: Buyya
+    given-names: Rajkumar
+date-released: "2024"
+version: "preprint"
+identifiers:
+  - type: arXiv
+    value: "2411.13039"
+  - type: url
+    value: "https://arxiv.org/abs/2411.13039"
+type: article
