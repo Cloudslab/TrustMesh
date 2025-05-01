@@ -249,15 +249,16 @@ This project is licensed under the GNU General Public License - see the [LICENSE
 
 If you use TrustMesh in your research, please cite:
 ```
-@misc{rangwala2024trustmeshblockchainenabledtrusteddistributed,
-      title={TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments}, 
-      author={Murtaza Rangwala and Rajkumar Buyya},
-      year={2024},
-      eprint={2411.13039},
-      archivePrefix={arXiv},
-      primaryClass={cs.DC},
-      url={https://arxiv.org/abs/2411.13039}, 
-}
+@INPROCEEDINGS{10978934,
+  author={Rangwala, Murtaza and Buyya, Rajkumar},
+  booktitle={2025 IEEE 22nd International Conference on Software Architecture (ICSA)}, 
+  title={TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments}, 
+  year={2025},
+  volume={},
+  number={},
+  pages={131-141},
+  keywords={Fault tolerance;Trusted computing;Technological innovation;Software architecture;Scheduling algorithms;Fault tolerant systems;Trustless services;Internet of Things;Security;Resource management;Internet of Things;Distributed Systems;Edge Computing;Blockchains;Decentralized Applications;Trusted Computing},
+  doi={10.1109/ICSA65012.2025.00022}}
 ```
 
 ## Authors
