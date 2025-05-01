@@ -1,16 +1,31 @@
 cff-version: 1.2.0
-message: "If you use or reference this work, please cite it using the metadata below."
-title: "TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments"
+message: "If you use this software, please cite it as below."
 authors:
-  - family-names: Rangwala
-    given-names: Murtaza
-  - family-names: Buyya
-    given-names: Rajkumar
-date-released: "2024"
-version: "preprint"
-identifiers:
-  - type: arXiv
-    value: "2411.13039"
-  - type: url
-    value: "https://arxiv.org/abs/2411.13039"
-type: article
+  - family-names: "Rangwala"
+    given-names: "Murtaza"
+  - family-names: "Buyya"
+    given-names: "Rajkumar"
+title: "TrustMesh: A Blockchain-Enabled Trusted Distributed Computing Framework for Open Heterogeneous IoT Environments"
+doi: "10.1109/ICSA65012.2025.00022"
+date-released: 2025
+url: "https://doi.org/10.1109/ICSA65012.2025.00022"
+conference:
+  name: "IEEE 22nd International Conference on Software Architecture (ICSA)"
+  year: 2025
+pages: "131-141"
+keywords:
+  - "Fault tolerance"
+  - "Trusted computing"
+  - "Technological innovation"
+  - "Software architecture"
+  - "Scheduling algorithms"
+  - "Fault tolerant systems"
+  - "Trustless services"
+  - "Internet of Things"
+  - "Security"
+  - "Resource management"
+  - "Distributed Systems"
+  - "Edge Computing"
+  - "Blockchains"
+  - "Decentralized Applications"
+  - "Trusted Computing"
