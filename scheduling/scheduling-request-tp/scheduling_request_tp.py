@@ -5,6 +5,7 @@ import logging
 import os
 import ssl
 import tempfile
+import time
 import traceback
 
 from sawtooth_sdk.processor.handler import TransactionHandler
@@ -131,14 +132,30 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         workflow_id = payload['workflow_id']
         schedule_id = payload['schedule_id']
         source_url, source_public_key = payload['source_url'], payload['source_public_key']
+        node_id = payload.get('node_id')  # For federated learning workflows
 
-        logger.info(f"Workflow ID: {workflow_id}, Schedule ID: {schedule_id}")
+        logger.info(f"Workflow ID: {workflow_id}, Schedule ID: {schedule_id}, Node ID: {node_id}")
 
         if not self._validate_workflow_id(context, workflow_id):
             logger.error(f"Invalid workflow ID: {workflow_id}")
             raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
-        logger.info("Selecting scheduler")
+        # Check if this is a federated learning workflow
+        is_federated = self._is_federated_workflow(context, workflow_id)
+        
+        if is_federated:
+            logger.info(f"Detected federated learning workflow for {workflow_id}")
+            self._handle_federated_schedule_request(payload, context, workflow_id, schedule_id, 
+                                                  source_url, source_public_key, node_id)
+        else:
+            logger.info(f"Processing standard workflow for {workflow_id}")
+            self._handle_standard_schedule_request(payload, context, workflow_id, schedule_id,
+                                                 source_url, source_public_key)
+
+    def _handle_standard_schedule_request(self, payload, context, workflow_id, schedule_id, 
+                                        source_url, source_public_key):
+        """Handle scheduling for standard (non-federated) workflows"""
+        logger.info("Selecting scheduler for standard workflow")
         scheduler_node = self.loop.run_until_complete(self._select_scheduler())
         logger.info(f"Selected scheduler node: {scheduler_node}")
 
@@ -148,15 +165,16 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             'schedule_id': schedule_id,
             'source_url': source_url,
             'source_public_key': source_public_key,
-            'assigned_scheduler': scheduler_node
+            'assigned_scheduler': scheduler_node,
+            'workflow_type': 'standard'
         }
 
-        logger.info(f"Setting state for schedule {schedule_id}")
+        logger.info(f"Setting state for standard schedule {schedule_id}")
         context.set_state({
             schedule_address: json.dumps(schedule_data).encode()
         })
 
-        logger.info(f"Schedule request {schedule_id} assigned to node {scheduler_node}")
+        logger.info(f"Standard schedule request {schedule_id} assigned to node {scheduler_node}")
 
         # Emit an event
         context.add_event(
@@ -165,10 +183,65 @@ class IoTScheduleTransactionHandler(TransactionHandler):
                         ("schedule_id", schedule_id),
                         ("source_url", source_url),
                         ("source_public_key", source_public_key),
-                        ("assigned_scheduler", scheduler_node)]
+                        ("assigned_scheduler", scheduler_node),
+                        ("workflow_type", "standard")]
         )
-        logger.info(f"Emitted event for schedule request. workflow_id: {workflow_id}, "
+        logger.info(f"Emitted event for standard schedule request. workflow_id: {workflow_id}, "
                     f"schedule_id: {schedule_id}, assigned_scheduler: {scheduler_node}")
+
+    def _handle_federated_schedule_request(self, payload, context, workflow_id, schedule_id,
+                                         source_url, source_public_key, node_id):
+        """Handle scheduling for federated learning workflows"""
+        if not node_id:
+            raise InvalidTransaction("Node ID is required for federated learning workflows")
+        
+        # Check if a federated round already exists for this workflow
+        existing_round = self._get_existing_federated_round(context, workflow_id)
+        
+        if existing_round:
+            # Join existing federated round
+            fed_schedule_id = existing_round['schedule_id']
+            coordinator_node = existing_round['coordinator_node']
+            logger.info(f"Joining existing federated round for {workflow_id} with schedule_id {fed_schedule_id}")
+        else:
+            # Create new federated round - use consensus to elect coordinator
+            coordinator_node = self.loop.run_until_complete(self._select_scheduler())
+            fed_schedule_id = schedule_id  # Use the provided schedule_id for federated round
+            
+            # Store federated round information
+            self._create_federated_round_record(context, workflow_id, fed_schedule_id, coordinator_node)
+            logger.info(f"Created new federated round for {workflow_id} with coordinator {coordinator_node}")
+
+        schedule_address = self._make_schedule_address(fed_schedule_id)
+        schedule_data = {
+            'workflow_id': workflow_id,
+            'schedule_id': fed_schedule_id,
+            'source_url': source_url,
+            'source_public_key': source_public_key,
+            'assigned_scheduler': coordinator_node,
+            'workflow_type': 'federated_learning',
+            'node_id': node_id,
+            'is_federated_coordinator': (node_id == 'iot-0')  # iot-0 is the default coordinator
+        }
+
+        logger.info(f"Setting state for federated schedule {fed_schedule_id}")
+        context.set_state({
+            schedule_address: json.dumps(schedule_data).encode()
+        })
+
+        # Emit federated schedule event
+        context.add_event(
+            event_type="federated-schedule-request",
+            attributes=[("workflow_id", workflow_id),
+                        ("schedule_id", fed_schedule_id),
+                        ("node_id", node_id),
+                        ("source_url", source_url),
+                        ("source_public_key", source_public_key),
+                        ("assigned_scheduler", coordinator_node),
+                        ("workflow_type", "federated_learning")]
+        )
+        logger.info(f"Emitted federated schedule event. workflow_id: {workflow_id}, "
+                    f"schedule_id: {fed_schedule_id}, node_id: {node_id}, coordinator: {coordinator_node}")
 
     def _validate_workflow_id(self, context, workflow_id):
         logger.info(f"Validating workflow ID: {workflow_id}")
@@ -177,6 +250,69 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         is_valid = len(state_entries) > 0
         logger.info(f"Workflow ID {workflow_id} is valid: {is_valid}")
         return is_valid
+
+    def _is_federated_workflow(self, context, workflow_id):
+        """Check if this is a federated learning workflow"""
+        try:
+            address = self._make_workflow_address(workflow_id)
+            state_entries = context.get_state([address])
+            if state_entries:
+                workflow_data = json.loads(state_entries[0].data.decode())
+                dependency_graph = workflow_data.get('dependency_graph', {})
+                workflow_type = dependency_graph.get('workflow_type', 'standard')
+                federated_config = dependency_graph.get('federated_config', {})
+                
+                is_federated = workflow_type == 'federated_learning' or bool(federated_config)
+                logger.info(f"Workflow {workflow_id} is federated: {is_federated}")
+                return is_federated
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if workflow is federated: {e}")
+            return False
+
+    def _get_existing_federated_round(self, context, workflow_id):
+        """Check if a federated round already exists for this workflow"""
+        try:
+            # Try to find existing federated round data
+            # For now, we'll check Redis cache - in production this would query blockchain state
+            fed_address = self._make_federated_round_address(workflow_id, 1)  # Round 1 by default
+            state_entries = context.get_state([fed_address])
+            
+            if state_entries:
+                round_data = json.loads(state_entries[0].data.decode())
+                logger.info(f"Found existing federated round for {workflow_id}: {round_data['schedule_id']}")
+                return round_data
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for existing federated round: {e}")
+            return None
+
+    def _create_federated_round_record(self, context, workflow_id, schedule_id, coordinator_node):
+        """Create a record of the federated round"""
+        try:
+            fed_address = self._make_federated_round_address(workflow_id, 1)  # Round 1 by default
+            
+            round_data = {
+                'workflow_id': workflow_id,
+                'round_number': 1,
+                'schedule_id': schedule_id,
+                'coordinator_node': coordinator_node,
+                'expected_nodes': ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4'],
+                'min_nodes_required': 3,
+                'status': 'initializing',
+                'created_time': time.time()
+            }
+            
+            context.set_state({
+                fed_address: json.dumps(round_data).encode()
+            })
+            
+            logger.info(f"Created federated round record for {workflow_id}")
+            
+        except Exception as e:
+            logger.error(f"Error creating federated round record: {e}")
+            raise InvalidTransaction(f"Failed to create federated round: {e}")
 
     async def _select_scheduler(self):
         logger.info("Entering _select_scheduler method")
@@ -229,6 +365,13 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     @staticmethod
     def _make_workflow_address(workflow_id):
         return WORKFLOW_NAMESPACE + hashlib.sha512(workflow_id.encode()).hexdigest()[:64]
+
+    @staticmethod
+    def _make_federated_round_address(workflow_id, round_number):
+        """Generate address for federated round information"""
+        federated_namespace = hashlib.sha512('federated-schedule'.encode()).hexdigest()[:6]
+        round_key = f"{workflow_id}_round_{round_number}"
+        return federated_namespace + hashlib.sha512(round_key.encode()).hexdigest()[:64]
 
 
 def main():

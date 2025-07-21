@@ -36,6 +36,8 @@ COPY response_manager/* ./response_manager/
 COPY datasets ./datasets
 COPY *.py ./
 
+# Federated learning is now integrated into core transaction processors
+
 ENV SAWTOOTH_PRIVATE_KEY /root/.sawtooth/keys/client.priv
 
 # Keep the container running

@@ -439,21 +439,31 @@ class TaskExecutor:
             raise Exception(f"Task {app_id} not found in schedule level_info")
 
         if current_level == 0:
-            input_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_input"
-            try:
-                input_json = await self.fetch_data_with_retry(input_key)
-                if input_json is None:
-                    raise Exception(f"Input data not found for key: {input_key}")
-                input_doc = json.loads(input_json)
-                if 'data' not in input_doc:
-                    raise Exception(f"'data' field not found in input document for key: {input_key}")
-                input_data = input_doc['data']
-                persistence_flag = input_doc['persist_data']
+            # Check for federated learning workflow first
+            federated_data = await self.fetch_federated_input_data(workflow_id, schedule_id, app_id)
+            
+            if federated_data:
+                input_data = federated_data['data']
+                persistence_flag = federated_data['persist_data']
                 total_task_time = 0
-                logger.debug(f"Input data fetched for task {app_id}")
-            except Exception as e:
-                logger.error(f"Error fetching input data for {input_key}: {str(e)}", exc_info=True)
-                raise
+                logger.info(f"Federated input data fetched for task {app_id} with {len(federated_data.get('node_contributions', []))} node contributions")
+            else:
+                # Fall back to standard single-node data retrieval
+                input_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_input"
+                try:
+                    input_json = await self.fetch_data_with_retry(input_key)
+                    if input_json is None:
+                        raise Exception(f"Input data not found for key: {input_key}")
+                    input_doc = json.loads(input_json)
+                    if 'data' not in input_doc:
+                        raise Exception(f"'data' field not found in input document for key: {input_key}")
+                    input_data = input_doc['data']
+                    persistence_flag = input_doc['persist_data']
+                    total_task_time = 0
+                    logger.debug(f"Standard input data fetched for task {app_id}")
+                except Exception as e:
+                    logger.error(f"Error fetching input data for {input_key}: {str(e)}", exc_info=True)
+                    raise
         else:
             try:
                 input_data, persistence_flag, total_task_time = await self.fetch_dependency_outputs(workflow_id,
@@ -554,6 +564,56 @@ class TaskExecutor:
             except Exception as e:
                 logger.error(f"Unexpected error fetching data for key {key}: {str(e)}", exc_info=True)
                 raise
+
+    async def fetch_federated_input_data(self, workflow_id, schedule_id, app_id):
+        """Fetch input data for federated learning workflows"""
+        try:
+            # Check for federated data using the new aggregation format
+            federated_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_federated_nodes"
+            
+            # Try to get aggregated federated data
+            federated_list = await self.redis.lrange(federated_key, 0, -1)
+            
+            if not federated_list:
+                logger.debug(f"No federated data found for key: {federated_key}")
+                return None
+            
+            logger.info(f"Found {len(federated_list)} federated node contributions for {app_id}")
+            
+            # Parse all node contributions
+            node_contributions = []
+            aggregated_data = []
+            persist_data = False
+            
+            for node_data_json in federated_list:
+                node_data = json.loads(node_data_json)
+                node_contributions.append({
+                    'node_id': node_data['node_id'],
+                    'timestamp': node_data['timestamp']
+                })
+                
+                # Aggregate the actual data
+                if isinstance(node_data['data'], list):
+                    aggregated_data.extend(node_data['data'])
+                else:
+                    aggregated_data.append(node_data['data'])
+                
+                # Use persistence flag from any node (they should all be the same)
+                persist_data = node_data.get('persist_data', persist_data)
+            
+            logger.info(f"Aggregated federated data: {len(aggregated_data)} total items from {len(node_contributions)} nodes")
+            
+            return {
+                'data': aggregated_data,
+                'persist_data': persist_data,
+                'node_contributions': node_contributions,
+                'is_federated': True,
+                'total_nodes': len(node_contributions)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching federated input data: {str(e)}", exc_info=True)
+            return None
 
     async def fetch_dependency_outputs(self, workflow_id, schedule_id, app_id, schedule):
         logger.info(f"Fetching dependency outputs for task: {app_id} in schedule {schedule_id}")

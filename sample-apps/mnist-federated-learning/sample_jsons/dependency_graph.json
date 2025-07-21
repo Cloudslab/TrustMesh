@@ -1,0 +1,8 @@
+{
+  "start": "local-training-app-id",
+  "nodes": {
+    "local-training-app-id": {"next": ["aggregate-models-app-id"]},
+    "aggregate-models-app-id": {"next": ["model-evaluation-app-id"]},
+    "model-evaluation-app-id": {"next": []}
+  }
+}

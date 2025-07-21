@@ -5,6 +5,7 @@ import logging
 import os
 import ssl
 import tempfile
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -173,8 +174,9 @@ class IoTDataTransactionHandler(TransactionHandler):
             workflow_id = payload['workflow_id']
             schedule_id = payload['schedule_id']
             persist_data = payload.get('persist_data', False)
+            node_id = payload.get('node_id')  # New: Node identifier for federated learning
 
-            logger.info(f"Processing IoT data for workflow ID: {workflow_id}, schedule ID: {schedule_id}")
+            logger.info(f"Processing IoT data for workflow ID: {workflow_id}, schedule ID: {schedule_id}, node ID: {node_id}")
 
             if not isinstance(iot_data, list):
                 raise InvalidTransaction("Invalid payload: iot_data must be a list")
@@ -182,10 +184,16 @@ class IoTDataTransactionHandler(TransactionHandler):
             if not self._validate_workflow_id(context, workflow_id):
                 raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
+            # Check if this is a federated learning workflow
+            is_federated = self._is_federated_workflow(context, workflow_id)
+            
+            if is_federated and not node_id:
+                raise InvalidTransaction("Node ID is required for federated learning workflows")
+
             iot_data_hash = self._calculate_hash(iot_data)
 
             future = self.executor.submit(self._run_async_operations, context, workflow_id, schedule_id, iot_data,
-                                          iot_data_hash, persist_data)
+                                          iot_data_hash, persist_data, node_id, is_federated)
             future.result()
 
             if persist_data:
@@ -193,7 +201,9 @@ class IoTDataTransactionHandler(TransactionHandler):
                 iot_data_state = json.dumps({
                     'schedule_id': schedule_id,
                     'workflow_id': workflow_id,
-                    'iot_data_hash': iot_data_hash
+                    'iot_data_hash': iot_data_hash,
+                    'node_id': node_id,
+                    'is_federated': is_federated
                 }).encode()
 
                 logger.info(f"Writing IoT data hash to blockchain for schedule ID: {schedule_id}")
@@ -209,17 +219,26 @@ class IoTDataTransactionHandler(TransactionHandler):
             logger.error(traceback.format_exc())
             raise InvalidTransaction(str(e))
 
-    def _run_async_operations(self, context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data):
+    def _run_async_operations(self, context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data, node_id=None, is_federated=False):
         return self.loop.run_until_complete(
-            self._async_operations(context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data))
+            self._async_operations(context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data, node_id, is_federated))
 
-    async def _async_operations(self, context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data):
+    async def _async_operations(self, context, workflow_id, schedule_id, iot_data, iot_data_hash, persist_data, node_id=None, is_federated=False):
         dependency_graph = self._get_dependency_graph(context, workflow_id)
-        data_id = self._generate_data_id(workflow_id, schedule_id, dependency_graph["start"], 'input')
-
-        tasks = [self._store_data_in_redis(data_id, iot_data, workflow_id, schedule_id, persist_data)]
-        if persist_data:
-            tasks.append(self._store_data_in_cloudant(data_id, iot_data, iot_data_hash, workflow_id, schedule_id))
+        
+        if is_federated:
+            # For federated workflows, use a different storage strategy
+            tasks = [self._store_federated_data_in_redis(workflow_id, schedule_id, dependency_graph["start"], 
+                                                       iot_data, node_id, persist_data)]
+            if persist_data:
+                data_id = self._generate_federated_data_id(workflow_id, schedule_id, dependency_graph["start"], node_id, 'input')
+                tasks.append(self._store_data_in_cloudant(data_id, iot_data, iot_data_hash, workflow_id, schedule_id))
+        else:
+            # Standard single-node workflow
+            data_id = self._generate_data_id(workflow_id, schedule_id, dependency_graph["start"], 'input')
+            tasks = [self._store_data_in_redis(data_id, iot_data, workflow_id, schedule_id, persist_data)]
+            if persist_data:
+                tasks.append(self._store_data_in_cloudant(data_id, iot_data, iot_data_hash, workflow_id, schedule_id))
 
         await asyncio.gather(*tasks)
 
@@ -239,6 +258,384 @@ class IoTDataTransactionHandler(TransactionHandler):
         except RedisError as e:
             logger.error(f"Failed to store IoT data in Redis: {str(e)}")
             raise
+
+    async def _store_federated_data_in_redis(self, workflow_id, schedule_id, app_id, data, node_id, persist_data):
+        """Store federated learning data using Redis lists for multi-node aggregation"""
+        try:
+            # Store individual node data in a list
+            federated_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_federated_nodes"
+            node_data = {
+                'node_id': node_id,
+                'data': data,
+                'timestamp': time.time(),
+                'workflow_id': workflow_id,
+                'schedule_id': schedule_id,
+                'persist_data': persist_data
+            }
+            
+            # Add to Redis list (left push for FIFO order)
+            result = await self.redis.lpush(federated_key, json.dumps(node_data))
+            
+            # Set expiration for the federated data (24 hours)
+            await self.redis.expire(federated_key, 86400)
+            
+            logger.info(f"Successfully stored federated data for node {node_id} in Redis key: {federated_key}")
+            
+            # Check if we have reached the minimum threshold for federated processing
+            await self._check_federated_completion_threshold(workflow_id, schedule_id, app_id)
+            
+        except RedisError as e:
+            logger.error(f"Failed to store federated IoT data in Redis: {str(e)}")
+            raise
+
+    async def _check_federated_completion_threshold(self, workflow_id, schedule_id, app_id):
+        """Check if federated learning round has enough participants to proceed"""
+        timeout_start = time.time()
+        timeout_duration = 300  # 5 minutes timeout
+        
+        try:
+            # Get federated round information with timeout protection
+            fed_round_info = await asyncio.wait_for(
+                self._get_federated_round_info(workflow_id), 
+                timeout=30.0  # 30 second timeout for state query
+            )
+            
+            if not fed_round_info:
+                logger.info(f"No federated round info found for workflow {workflow_id}")
+                return
+            
+            min_nodes_required = fed_round_info.get('min_nodes_required', 3)
+            expected_nodes = fed_round_info.get('expected_nodes', [])
+            
+            # Check current participants with timeout protection
+            federated_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_federated_nodes"
+            
+            # Implement timeout-aware participant checking
+            retry_count = 0
+            max_retries = 3
+            
+            while retry_count < max_retries:
+                try:
+                    current_count = await asyncio.wait_for(
+                        self.redis.llen(federated_key), 
+                        timeout=10.0
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    retry_count += 1
+                    logger.warning(f"Redis timeout on attempt {retry_count}, retrying...")
+                    if retry_count >= max_retries:
+                        raise
+                    await asyncio.sleep(1)
+            
+            logger.info(f"Federated round {workflow_id}:{schedule_id} - Current participants: {current_count}/{len(expected_nodes)}, Min required: {min_nodes_required}")
+            
+            # Check if we've exceeded the timeout
+            if time.time() - timeout_start > timeout_duration:
+                logger.error(f"Federated round {workflow_id}:{schedule_id} exceeded timeout ({timeout_duration}s)")
+                await self._handle_federated_timeout(workflow_id, schedule_id, app_id, current_count, min_nodes_required)
+                return
+            
+            # If we have minimum nodes, trigger the next stage
+            if current_count >= min_nodes_required:
+                await self._trigger_federated_processing(workflow_id, schedule_id, app_id)
+            elif current_count > 0:
+                # Set a timeout check for incomplete rounds
+                await self._schedule_timeout_check(workflow_id, schedule_id, app_id, timeout_duration)
+                
+        except asyncio.TimeoutError as e:
+            logger.error(f"Timeout while checking federated completion threshold: {str(e)}")
+            await self._handle_federated_timeout(workflow_id, schedule_id, app_id, 0, min_nodes_required)
+        except Exception as e:
+            logger.error(f"Error checking federated completion threshold: {str(e)}")
+            # Attempt graceful degradation
+            await self._handle_federated_error(workflow_id, schedule_id, app_id, str(e))
+
+    async def _trigger_federated_processing(self, workflow_id, schedule_id, app_id):
+        """Trigger the next stage of federated learning processing"""
+        try:
+            # Publish event to indicate federated round is ready
+            event_data = {
+                'event_type': 'federated_data_ready',
+                'workflow_id': workflow_id,
+                'schedule_id': schedule_id,
+                'app_id': app_id,
+                'timestamp': time.time()
+            }
+            
+            await self.redis.publish('federated_events', json.dumps(event_data))
+            logger.info(f"Triggered federated processing for workflow {workflow_id}, schedule {schedule_id}")
+            
+        except Exception as e:
+            logger.error(f"Error triggering federated processing: {str(e)}")
+    
+    async def _handle_federated_timeout(self, workflow_id, schedule_id, app_id, current_count, min_required):
+        """Handle federated round timeout scenarios"""
+        try:
+            logger.warning(f"Federated round {workflow_id}:{schedule_id} timed out with {current_count}/{min_required} participants")
+            
+            # Mark round as failed in Redis
+            timeout_key = f"fed_round_timeout_{workflow_id}_{schedule_id}"
+            timeout_data = {
+                'status': 'timeout',
+                'participants_received': current_count,
+                'min_required': min_required,
+                'timeout_time': time.time(),
+                'reason': 'insufficient_participants'
+            }
+            
+            await self.redis.setex(timeout_key, 3600, json.dumps(timeout_data))
+            
+            # Clean up partial federated data
+            federated_key = f"iot_data_{workflow_id}_{schedule_id}_{app_id}_federated_nodes"
+            await self.redis.delete(federated_key)
+            
+            # Publish timeout event for monitoring
+            timeout_event = {
+                'event_type': 'federated_timeout',
+                'workflow_id': workflow_id,
+                'schedule_id': schedule_id,
+                'app_id': app_id,
+                'participants_received': current_count,
+                'min_required': min_required,
+                'timestamp': time.time()
+            }
+            
+            await self.redis.publish('federated_events', json.dumps(timeout_event))
+            logger.info(f"Published federated timeout event for {workflow_id}:{schedule_id}")
+            
+        except Exception as e:
+            logger.error(f"Error handling federated timeout: {e}")
+    
+    async def _handle_federated_error(self, workflow_id, schedule_id, app_id, error_message):
+        """Handle federated round errors with graceful degradation"""
+        try:
+            logger.error(f"Federated round {workflow_id}:{schedule_id} encountered error: {error_message}")
+            
+            # Store error information
+            error_key = f"fed_round_error_{workflow_id}_{schedule_id}"
+            error_data = {
+                'status': 'error',
+                'error_message': error_message,
+                'error_time': time.time(),
+                'app_id': app_id
+            }
+            
+            await self.redis.setex(error_key, 3600, json.dumps(error_data))
+            
+            # Attempt to publish error event
+            error_event = {
+                'event_type': 'federated_error',
+                'workflow_id': workflow_id,
+                'schedule_id': schedule_id,
+                'app_id': app_id,
+                'error_message': error_message,
+                'timestamp': time.time()
+            }
+            
+            await self.redis.publish('federated_events', json.dumps(error_event))
+            
+        except Exception as secondary_error:
+            logger.critical(f"Critical error in error handler: {secondary_error}")
+    
+    async def _schedule_timeout_check(self, workflow_id, schedule_id, app_id, timeout_duration):
+        """Schedule a delayed timeout check for incomplete federated rounds"""
+        try:
+            # Store timeout check info for external monitoring
+            timeout_check_key = f"fed_timeout_check_{workflow_id}_{schedule_id}"
+            timeout_check_data = {
+                'scheduled_time': time.time(),
+                'timeout_duration': timeout_duration,
+                'workflow_id': workflow_id,
+                'schedule_id': schedule_id,
+                'app_id': app_id,
+                'status': 'scheduled'
+            }
+            
+            await self.redis.setex(timeout_check_key, int(timeout_duration + 60), json.dumps(timeout_check_data))
+            logger.info(f"Scheduled timeout check for federated round {workflow_id}:{schedule_id} in {timeout_duration}s")
+            
+        except Exception as e:
+            logger.error(f"Error scheduling timeout check: {e}")
+
+    async def _get_federated_round_info(self, workflow_id):
+        """Get federated round information from blockchain via federated-schedule-tp state"""
+        try:
+            # Try to get from Redis cache first
+            cache_key = f"fed_round_cache_{workflow_id}"
+            cached_info = await self.redis.get(cache_key)
+            
+            if cached_info:
+                return json.loads(cached_info)
+            
+            # Query blockchain state for federated round information
+            federated_round_data = await self._query_federated_round_from_blockchain(workflow_id)
+            
+            if federated_round_data:
+                logger.info(f"Retrieved federated round info from blockchain for {workflow_id}")
+                # Cache for 1 hour
+                await self.redis.setex(cache_key, 3600, json.dumps(federated_round_data))
+                return federated_round_data
+            else:
+                # Fallback: Check if workflow is federated by examining dependency graph
+                workflow_info = await self._get_workflow_dependency_graph(workflow_id)
+                if workflow_info and workflow_info.get('workflow_type') == 'federated_learning':
+                    # Extract federated config from workflow
+                    federated_config = workflow_info.get('federated_config', {})
+                    federated_round_data = {
+                        'min_nodes_required': federated_config.get('min_nodes_required', 3),
+                        'expected_nodes': federated_config.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
+                        'workflow_type': 'federated_learning',
+                        'coordinator_election': federated_config.get('coordinator_election', 'consensus'),
+                        'aggregation_strategy': federated_config.get('aggregation_strategy', 'fedavg')
+                    }
+                    
+                    logger.info(f"Extracted federated config from workflow dependency graph for {workflow_id}")
+                    # Cache for 1 hour
+                    await self.redis.setex(cache_key, 3600, json.dumps(federated_round_data))
+                    return federated_round_data
+                    
+                logger.info(f"No federated round info found for workflow {workflow_id}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"Error getting federated round info: {str(e)}")
+            return None
+    
+    async def _query_federated_round_from_blockchain(self, workflow_id):
+        """Query federated round information from blockchain state"""
+        try:
+            # First check Redis for most recent federated round data
+            fed_round_key = f"fed_round:{workflow_id}:1"
+            cached_round = await self.redis.get(fed_round_key)
+            
+            if cached_round:
+                round_data = json.loads(cached_round)
+                logger.info(f"Found federated round data in Redis cache: {round_data}")
+                return {
+                    'min_nodes_required': round_data.get('min_nodes_required', 3),
+                    'expected_nodes': round_data.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
+                    'workflow_type': 'federated_learning',
+                    'coordinator_node': round_data.get('coordinator_node'),
+                    'schedule_id': round_data.get('schedule_id'),
+                    'status': round_data.get('status', 'active')
+                }
+            
+            # Check for federated schedule data in Redis (from schedule event handler)
+            alt_key = f"federated_schedule_{workflow_id}"
+            alt_data = await self.redis.get(alt_key)
+            if alt_data:
+                schedule_data = json.loads(alt_data)
+                federated_metadata = schedule_data.get('federated_metadata', {})
+                if federated_metadata.get('is_federated'):
+                    logger.info(f"Found federated schedule data for {workflow_id}")
+                    return {
+                        'min_nodes_required': federated_metadata.get('min_nodes_required', 3),
+                        'expected_nodes': federated_metadata.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
+                        'workflow_type': 'federated_learning',
+                        'coordinator_node': federated_metadata.get('coordinator_node'),
+                        'aggregation_strategy': federated_metadata.get('aggregation_strategy', 'fedavg')
+                    }
+            
+            # Cross-TP communication: Query federated-schedule-tp blockchain state
+            federated_round_info = await self._query_federated_schedule_tp_state(workflow_id)
+            if federated_round_info:
+                logger.info(f"Retrieved federated round info from blockchain via federated-schedule-tp")
+                return federated_round_info
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error querying blockchain for federated round: {str(e)}")
+            return None
+    
+    async def _query_federated_schedule_tp_state(self, workflow_id):
+        """Query federated-schedule-tp blockchain state using address calculation"""
+        try:
+            # Calculate the federated-schedule-tp state address
+            # This mirrors the address calculation in federated_schedule_tp.py
+            FEDERATED_NAMESPACE = hashlib.sha512('federated-schedule'.encode()).hexdigest()[:6]
+            
+            # Try different possible address patterns
+            potential_addresses = [
+                f"fed_round:{workflow_id}:1",
+                f"federated_schedule:{workflow_id}",
+                f"fed_coordinator:{workflow_id}"
+            ]
+            
+            for address_suffix in potential_addresses:
+                try:
+                    # Calculate full blockchain address
+                    full_address = FEDERATED_NAMESPACE + hashlib.sha512(address_suffix.encode()).hexdigest()[:64]
+                    
+                    # This would require context access which we don't have in async operations
+                    # For now, use Redis as the cross-TP communication channel
+                    redis_key = f"blockchain_state_{full_address}"
+                    blockchain_state = await self.redis.get(redis_key)
+                    
+                    if blockchain_state:
+                        state_data = json.loads(blockchain_state)
+                        logger.info(f"Found blockchain state for federated schedule: {address_suffix}")
+                        return {
+                            'min_nodes_required': state_data.get('min_nodes_required', 3),
+                            'expected_nodes': state_data.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
+                            'workflow_type': 'federated_learning',
+                            'coordinator_node': state_data.get('coordinator_node'),
+                            'schedule_id': state_data.get('schedule_id'),
+                            'status': state_data.get('status', 'active'),
+                            'round_number': state_data.get('round_number', 1)
+                        }
+                except Exception as e:
+                    logger.debug(f"No state found for address pattern {address_suffix}: {e}")
+                    continue
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error querying federated-schedule-tp state: {str(e)}")
+            return None
+    
+    async def _get_workflow_dependency_graph(self, workflow_id):
+        """Get workflow dependency graph to check if it's federated"""
+        try:
+            # Try to get from Redis cache first
+            workflow_cache_key = f"workflow_cache_{workflow_id}"
+            cached_workflow = await self.redis.get(workflow_cache_key)
+            
+            if cached_workflow:
+                workflow_data = json.loads(cached_workflow)
+                dependency_graph = workflow_data.get('dependency_graph')
+                if dependency_graph:
+                    logger.debug(f"Retrieved workflow dependency graph from cache for {workflow_id}")
+                    return dependency_graph
+            
+            # Try to use the existing synchronous method
+            try:
+                dependency_graph = self._get_dependency_graph_sync(workflow_id)
+                if dependency_graph:
+                    # Cache it for future use
+                    workflow_data = {'dependency_graph': dependency_graph}
+                    await self.redis.setex(workflow_cache_key, 3600, json.dumps(workflow_data))
+                    logger.debug(f"Retrieved and cached workflow dependency graph for {workflow_id}")
+                    return dependency_graph
+            except Exception:
+                pass
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting workflow dependency graph: {str(e)}")
+            return None
+    
+    def _get_dependency_graph_sync(self, workflow_id):
+        """Synchronous method to get dependency graph using existing context"""
+        try:
+            # This would typically be called within a transaction context
+            # For now, return None and rely on Redis cache
+            return None
+        except Exception as e:
+            logger.debug(f"Could not get dependency graph synchronously: {e}")
+            return None
 
     async def _store_data_in_cloudant(self, data_id, data, data_hash, workflow_id, schedule_id):
         try:
@@ -278,6 +675,18 @@ class IoTDataTransactionHandler(TransactionHandler):
         else:
             raise InvalidTransaction(f"No workflow data found for workflow ID: {workflow_id}")
 
+    def _is_federated_workflow(self, context, workflow_id):
+        """Check if this is a federated learning workflow"""
+        try:
+            dependency_graph = self._get_dependency_graph(context, workflow_id)
+            workflow_type = dependency_graph.get('workflow_type', 'standard')
+            federated_config = dependency_graph.get('federated_config', {})
+            
+            return workflow_type == 'federated_learning' or bool(federated_config)
+        except Exception as e:
+            logger.error(f"Error checking if workflow is federated: {e}")
+            return False
+
     def cleanup_temp_files(self):
         for file in self.cloudant_certs:
             file.close()
@@ -288,6 +697,10 @@ class IoTDataTransactionHandler(TransactionHandler):
     @staticmethod
     def _generate_data_id(workflow_id, schedule_id, app_id, data_type):
         return f"{workflow_id}_{schedule_id}_{app_id}_{data_type}"
+
+    @staticmethod
+    def _generate_federated_data_id(workflow_id, schedule_id, app_id, node_id, data_type):
+        return f"{workflow_id}_{schedule_id}_{app_id}_{node_id}_{data_type}"
 
     @staticmethod
     def _calculate_hash(data):
