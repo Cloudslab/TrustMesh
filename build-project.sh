@@ -12,8 +12,30 @@ cd "$WORK_DIR" || exit
 docker build -t $DOCKER_USERNAME/peer-registry-tp:latest ./peer-registry/peer-registry-tp
 # Build docker-image-tp image
 docker build -t $DOCKER_USERNAME/docker-image-tp:latest ./auto-docker-deployment/docker-image-tp
-# Build docker-image-client image
+
+# Build MNIST Federated Learning sample applications FIRST
+echo "Building MNIST Federated Learning applications..."
+docker build -t $DOCKER_USERNAME/mnist-fl-local-training:latest ./sample-apps/mnist-federated-learning/task1_local_training
+docker build -t $DOCKER_USERNAME/mnist-fl-aggregate-models:latest ./sample-apps/mnist-federated-learning/task2_aggregate_models
+docker build -t $DOCKER_USERNAME/mnist-fl-model-evaluation:latest ./sample-apps/mnist-federated-learning/task3_model_evaluation
+
+# Create application tar files for deployment
+echo "Creating application tar files..."
+mkdir -p ./sample-apps/mnist-federated-learning/deployment
+docker save $DOCKER_USERNAME/mnist-fl-local-training:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz
+docker save $DOCKER_USERNAME/mnist-fl-aggregate-models:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz
+docker save $DOCKER_USERNAME/mnist-fl-model-evaluation:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz
+
+# Copy MNIST tar files to docker-image-client directory for Dockerfile access
+echo "Copying MNIST tar files to docker-image-client directory..."
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz ./auto-docker-deployment/docker-image-client/
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz ./auto-docker-deployment/docker-image-client/
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz ./auto-docker-deployment/docker-image-client/
+
+# NOW build docker-image-client with tar files available
+echo "Building docker-image-client with MNIST applications..."
 docker build -t $DOCKER_USERNAME/docker-image-client:latest ./auto-docker-deployment/docker-image-client
+
 # Build dependency-management-tp image
 docker build -t $DOCKER_USERNAME/dependency-management-tp:latest ./manage-dependency-workflow/dependency-management-tp
 # Build workflow-creation-client image
@@ -31,29 +53,10 @@ docker build -t $DOCKER_USERNAME/iot-node:latest ./iot-node
 # Build compute-node image
 docker build -t $DOCKER_USERNAME/compute-node:latest ./compute-node
 
-# Build MNIST Federated Learning sample applications
-echo "Building MNIST Federated Learning applications..."
-docker build -t $DOCKER_USERNAME/mnist-fl-local-training:latest ./sample-apps/mnist-federated-learning/task1_local_training
-docker build -t $DOCKER_USERNAME/mnist-fl-aggregate-models:latest ./sample-apps/mnist-federated-learning/task2_aggregate_models
-docker build -t $DOCKER_USERNAME/mnist-fl-model-evaluation:latest ./sample-apps/mnist-federated-learning/task3_model_evaluation
-
 # Build Federated Learning Coordinator
 echo "Building Federated Learning Coordinator..."
 # Build federated-schedule transaction processor
 docker build -t $DOCKER_USERNAME/federated-schedule-tp:latest ./scheduling/federated-schedule-tp
-
-# Create application tar files for deployment
-echo "Creating application tar files..."
-mkdir -p ./sample-apps/mnist-federated-learning/deployment
-docker save $DOCKER_USERNAME/mnist-fl-local-training:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz
-docker save $DOCKER_USERNAME/mnist-fl-aggregate-models:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz
-docker save $DOCKER_USERNAME/mnist-fl-model-evaluation:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz
-
-# Copy MNIST tar files to docker-image-client directory for Dockerfile access
-echo "Copying MNIST tar files to docker-image-client directory..."
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz ./auto-docker-deployment/docker-image-client/
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz ./auto-docker-deployment/docker-image-client/
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz ./auto-docker-deployment/docker-image-client/
 
 
 # Push images to Docker Hub
