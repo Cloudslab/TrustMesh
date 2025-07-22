@@ -33,7 +33,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the client script
 COPY transaction_initiator/* ./transaction_initiator/
 COPY response_manager/* ./response_manager/
-COPY datasets ./datasets
 COPY *.py ./
 
 # Federated learning is now integrated into core transaction processors
