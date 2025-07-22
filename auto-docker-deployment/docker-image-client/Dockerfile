@@ -39,10 +39,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the client script
 COPY docker_image_client.py .
 
-# Copy tar file
-COPY process-sensor-data.tar .
-COPY anomaly-detection.tar .
-COPY generate-alerts.tar .
+# Copy MNIST Federated Learning tar files
+COPY mnist-fl-local-training.tar.gz .
+COPY mnist-fl-aggregate-models.tar.gz .
+COPY mnist-fl-model-evaluation.tar.gz .
 
 ENV SAWTOOTH_PRIVATE_KEY /root/.sawtooth/keys/client.priv
 

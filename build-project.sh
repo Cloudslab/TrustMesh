@@ -49,6 +49,12 @@ docker save $DOCKER_USERNAME/mnist-fl-local-training:latest | gzip > ./sample-ap
 docker save $DOCKER_USERNAME/mnist-fl-aggregate-models:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz
 docker save $DOCKER_USERNAME/mnist-fl-model-evaluation:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz
 
+# Copy MNIST tar files to docker-image-client directory for Dockerfile access
+echo "Copying MNIST tar files to docker-image-client directory..."
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz ./auto-docker-deployment/docker-image-client/
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz ./auto-docker-deployment/docker-image-client/
+cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz ./auto-docker-deployment/docker-image-client/
+
 
 # Push images to Docker Hub
 docker push $DOCKER_USERNAME/peer-registry-tp:latest
