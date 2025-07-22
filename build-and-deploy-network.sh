@@ -312,13 +312,13 @@ items:"
                   done &&
                   echo \"Setting up CouchDB cluster using manual method (Cluster Setup API doesn't support SSL)\" &&
                   echo \"Step 1: Initialize cluster mode on coordinator node\" &&
-                  init_response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -H 'Content-Type: application/json' -d '{\"action\": \"enable_cluster\", \"bind_address\": \"0.0.0.0\", \"username\": \"'\\${COUCHDB_USER}'\", \"password\": \"'\\${COUCHDB_PASSWORD}'\", \"node_count\": \"'$num_compute_nodes'\"}')
+                  init_response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -H 'Content-Type: application/json' -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\": \\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\": \\\"\${COUCHDB_PASSWORD}\\\", \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
                   echo \"Coordinator cluster initialization response: \${init_response}\" &&
                   sleep 3 &&
                   echo \"Step 2: Initialize cluster mode on remote nodes\" &&
                   for num in \$(seq 1 $((num_compute_nodes-1))); do
                     echo \"Initializing cluster mode on couchdb-\${num}...\"
-                    remote_init=\$(curl --cacert /certs/ca.crt --cert /certs/node\${num}_crt --key /certs/node\${num}_key -X POST \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${num}.default.svc.cluster.local:6984/_cluster_setup\" -H 'Content-Type: application/json' -d '{\"action\": \"enable_cluster\", \"bind_address\": \"0.0.0.0\", \"username\": \"'\\${COUCHDB_USER}'\", \"password\": \"'\\${COUCHDB_PASSWORD}'\", \"node_count\": \"'$num_compute_nodes'\"}')
+                    remote_init=\$(curl --cacert /certs/ca.crt --cert /certs/node\${num}_crt --key /certs/node\${num}_key -X POST \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${num}.default.svc.cluster.local:6984/_cluster_setup\" -H 'Content-Type: application/json' -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\": \\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\": \\\"\${COUCHDB_PASSWORD}\\\", \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
                     echo \"Remote node couchdb-\${num} initialization response: \${remote_init}\"
                     sleep 2
                   done &&
