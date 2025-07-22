@@ -171,7 +171,7 @@ items:"
                       name: couchdb-secrets
                       key: COUCHDB_SECRET
                 - name: ERL_FLAGS
-                  value: \"-setcookie jT7egojgnPLzOncq9MQUzqwqHm6ZiPUU7xJfFLA8MA -couch_log level debug -kernel inet_dist_listen_min 9100 -kernel inet_dist_listen_max 9200 -proto_dist inet_tls -ssl_dist_optfile /opt/couchdb/etc/local.d/ssl_dist.conf\"
+                  value: \"-setcookie jT7egojgnPLzOncq9MQUzqwqHm6ZiPUU7xJfFLA8MA -couch_log level debug -kernel inet_dist_listen_min 9100 -kernel inet_dist_listen_max 9200\"
                 - name: NODENAME
                   value: \"couchdb-${i}.default.svc.cluster.local\"
               volumeMounts:
@@ -310,33 +310,31 @@ items:"
                     done
                     echo \"CouchDB on couchdb-\${i} is ready\"
                   done &&
-                  echo \"Configuring cluster mode on coordinator node\" &&
-                  coordinator_setup=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\") &&
-                  echo \"Coordinator setup response: \${coordinator_setup}\" &&
-                  echo \"Enabling cluster mode on remote nodes and adding to cluster\" &&
+                  echo \"Setting up CouchDB cluster using manual method (Cluster Setup API doesn't support SSL)\" &&
+                  echo \"Adding nodes to cluster manually using _nodes API\" &&
                   for num in \$(seq 1 $((num_compute_nodes-1))); do
-                    echo \"Enabling cluster on remote node couchdb-\${num}...\"
-                    remote_setup=\$(curl --cacert /certs/ca.crt --cert /certs/node\${num}_crt --key /certs/node\${num}_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${num}.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
-                    echo \"Remote node couchdb-\${num} setup response: \${remote_setup}\"
-                    sleep 3
-                    echo \"Adding remote node couchdb-\${num} to cluster from coordinator...\"
-                    add_response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"add_node\\\", \\\"host\\\":\\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"port\\\": 6984, \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\"}\")
+                    echo \"Adding couchdb-\${num} to cluster via _nodes API...\"
+                    add_response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_nodes/couchdb@couchdb-\${num}.default.svc.cluster.local\" -d '{}' -H 'Content-Type: application/json')
                     echo \"Add node couchdb-\${num} response: \${add_response}\"
-                    sleep 3
+                    sleep 2
                   done &&
-                  echo \"Waiting for nodes to synchronize...\" &&
-                  sleep 10 &&
-                  echo \"Finishing cluster setup\" &&
-                  response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key --max-time 60 -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"finish_cluster\\\"}\") &&
-                  echo \"Finish cluster response: \${response}\" &&
+                  echo \"Waiting for cluster to stabilize...\" &&
+                  sleep 15 &&
                   echo \"Checking cluster membership\" &&
                   membership=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X GET \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_membership\") &&
                   echo \"Cluster membership: \${membership}\" &&
-                  echo \"Creating \${RESOURCE_REGISTRY_DB} and \${TASK_DATA_DB} database on all nodes\" &&
+                  echo \"Creating system databases (_replicator, _users, _global_changes)\" &&
+                  system_dbs=\"_replicator _users _global_changes\"
+                  for db in \$system_dbs; do
+                    echo \"Creating system database: \$db\"
+                    response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\$db\")
+                    echo \"Creating \$db response: \${response}\"
+                  done &&
+                  echo \"Creating application databases (\${RESOURCE_REGISTRY_DB} and \${TASK_DATA_DB})\" &&
                   response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\${RESOURCE_REGISTRY_DB}\") &&
-                  echo \"Creating \${RESOURCE_REGISTRY_DB} on couchdb-0 response: \${response}\" &&
+                  echo \"Creating \${RESOURCE_REGISTRY_DB} response: \${response}\" &&
                   response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\${TASK_DATA_DB}\") &&
-                  echo \"Creating \${TASK_DATA_DB} on couchdb-0 response: \${response}\" &&
+                  echo \"Creating \${TASK_DATA_DB} response: \${response}\" &&
                   echo \"Waiting for \${RESOURCE_REGISTRY_DB} & \${TASK_DATA_DB} to be available on all nodes\" &&
                   for db in \${RESOURCE_REGISTRY_DB} \${TASK_DATA_DB}; do
                     for i in \$(seq 0 $((num_compute_nodes-1))); do
