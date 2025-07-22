@@ -147,7 +147,7 @@ class FederatedScheduleTransactionHandler(TransactionHandler):
     def __init__(self):
         # Connect to Redis for resource monitoring
         try:
-            self.redis_client = redis.Redis(host='redis-0.redis-service', port=6379, decode_responses=True)
+            self.redis_client = redis.Redis(host='redis-cluster', port=6379, decode_responses=True)
             self.redis_client.ping()
         except Exception as e:
             LOGGER.warning(f"Could not connect to Redis: {e}")

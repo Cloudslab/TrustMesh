@@ -156,7 +156,7 @@ Follow the prompts for:
 
 The script now automatically:
 - Deploys all TrustMesh components
-- **Automatically deploys the federated learning coordinator**
+- **Deploys federated-schedule-tp as part of each compute node**
 - Sets up Redis connectivity for coordination
 
 ### 3.4 Verify Deployment
@@ -167,32 +167,70 @@ kubectl get pods
 
 Wait for all pods to be in `Running` state. You should see:
 - All TrustMesh components running
-- **federated-schedule-tp-xxx** pod running
+- All compute nodes (pbft-0, pbft-1, pbft-2, pbft-3) with federated-schedule-tp containers
 - All IoT nodes ready
 
-Check federated schedule TP specifically:
+Check federated schedule TP in compute nodes:
 ```bash
-kubectl get pods -l app=federated-schedule-tp
-kubectl logs -l app=federated-schedule-tp
+kubectl logs pbft-0 -c federated-schedule-tp
+kubectl logs pbft-1 -c federated-schedule-tp
 ```
 
-Expected federated schedule TP log:
+Expected federated schedule TP log in each compute node:
 ```
 Starting Federated Schedule Transaction Processor
 Validator URL: tcp://sawtooth-validator:4004
 Redis: redis-0.redis-service:6379
-Federated Schedule TP started successfully
+Federated Schedule TP started successfully on compute node pbft-0
 ```
 
-## Step 4: Deploy MNIST Federated Learning Applications
+## Step 4: Pre-Flight System Verification
 
-### 4.1 Connect to Application Deployment Client
+Before deploying applications, verify all components are running:
+
+### 4.1 Verify All Pods Are Running
+```bash
+kubectl get pods
+```
+
+**Required pods should be in Running state:**
+- network-management-console-xxxxx (with multiple containers)
+- All compute nodes: pbft-0, pbft-1, pbft-2, pbft-3 (each with federated-schedule-tp container)
+- All IoT nodes: iot-0-xxxxx, iot-1-xxxxx, iot-2-xxxxx, iot-3-xxxxx, iot-4-xxxxx  
+- Storage: redis-0, redis-1, couchdb-0, couchdb-1, etc.
+
+### 4.2 Verify Federated Learning Components
+```bash
+# Check federated schedule transaction processor in compute nodes
+kubectl logs pbft-0 -c federated-schedule-tp --tail=20
+kubectl logs pbft-1 -c federated-schedule-tp --tail=20
+
+# Should see: "Federated Schedule TP started successfully on compute node pbft-X"
+```
+
+### 4.3 Check System Resources
+```bash
+# Verify sufficient resources
+kubectl top nodes
+kubectl describe nodes | grep -E "(cpu|memory)"
+```
+
+## Step 5: Deploy MNIST Federated Learning Applications
+
+### 5.1 Connect to Application Deployment Client
 
 ```bash
 kubectl exec -it network-management-console-xxxxx -c application-deployment-client bash
 ```
 
-### 4.2 Deploy the Three Applications
+### 5.2 Copy Application Requirements File
+
+First, copy the pre-configured application requirements:
+```bash
+cp /app/sample-apps/mnist-federated-learning/sample_jsons/app_requirements.json .
+```
+
+### 5.3 Deploy the Three Applications
 
 The build script created deployment files. Deploy them:
 
@@ -214,10 +252,19 @@ python docker_image_client.py deploy_image mnist-fl-model-evaluation.tar.gz app_
 ```
 **Note the returned Application ID** (e.g., `ghi789-model-evaluation`)
 
-### 4.3 Create Workflow
+### 5.4 Create Workflow
+
+**Connect to Workflow Creation Client:**
+```bash
+kubectl exec -it network-management-console-xxxxx -c workflow-creation-client bash
+```
+
+Copy the pre-configured dependency graph template:
+```bash
+cp /app/sample-apps/mnist-federated-learning/sample_jsons/dependency_graph.json .
+```
 
 Update the dependency graph with your actual Application IDs:
-
 ```bash
 # Edit the dependency graph
 nano dependency_graph.json
@@ -235,20 +282,15 @@ Update with your Application IDs:
 }
 ```
 
-**Connect to Workflow Creation Client:**
-```bash
-kubectl exec -it network-management-console-xxxxx -c workflow-creation-client bash
-```
-
 **Create the Workflow:**
 ```bash
 python workflow_creation_client.py dependency_graph.json
 ```
 **Note the returned Workflow ID** (e.g., `mnist-fl-workflow-xyz789`)
 
-## Step 5: Run MNIST Federated Learning
+## Step 6: Run MNIST Federated Learning
 
-### 5.1 Execute on All IoT Nodes Simultaneously
+### 6.1 Execute on All IoT Nodes Simultaneously
 
 **Important**: All 5 IoT nodes must start within a few minutes of each other for proper coordination.
 
@@ -290,18 +332,70 @@ python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id
 python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --auto-detect --max-rounds 5
 ```
 
-## Step 6: Monitor Federated Learning Progress
+### 6.2 Alternative: Batch Execution Script
 
-### 6.1 Monitor Federated Schedule TP
+For convenience, you can create a script to start all nodes at once. Create this on your control node:
 
 ```bash
-kubectl logs -l app=federated-schedule-tp -f
+# create-federated-learning-launcher.sh
+cat > federated-learning-launcher.sh << 'EOF'
+#!/bin/bash
+
+WORKFLOW_ID=$1
+MAX_ROUNDS=${2:-5}
+
+if [ -z "$WORKFLOW_ID" ]; then
+    echo "Usage: $0 <workflow-id> [max-rounds]"
+    exit 1
+fi
+
+echo "Starting MNIST Federated Learning with workflow: $WORKFLOW_ID"
+echo "Rounds: $MAX_ROUNDS"
+
+# Function to start a node
+start_node() {
+    local node_id=$1
+    echo "Starting $node_id..."
+    kubectl exec -it $node_id-* -c iot-node -- python mnist-federated-learning-simulation.py $WORKFLOW_ID --node-id $node_id --max-rounds $MAX_ROUNDS &
+}
+
+# Start all nodes in parallel
+start_node "iot-0"
+start_node "iot-1" 
+start_node "iot-2"
+start_node "iot-3"
+start_node "iot-4"
+
+echo "All nodes started. Waiting for completion..."
+wait
+
+echo "Federated learning session completed!"
+EOF
+
+chmod +x federated-learning-launcher.sh
 ```
 
-You should see:
+**Run all nodes at once:**
+```bash
+./federated-learning-launcher.sh mnist-fl-workflow-xyz789 5
+```
+
+## Step 7: Monitor Federated Learning Progress
+
+### 7.1 Monitor Federated Schedule TP
+
+```bash
+# Monitor federated schedule TP across all compute nodes
+kubectl logs pbft-0 -c federated-schedule-tp -f &
+kubectl logs pbft-1 -c federated-schedule-tp -f &
+kubectl logs pbft-2 -c federated-schedule-tp -f &
+kubectl logs pbft-3 -c federated-schedule-tp -f &
+```
+
+You should see (on the elected coordinator compute node):
 ```
 Processing federated schedule request for workflow mnist-fl-workflow-xyz789
-Elected coordinator: compute-node-2 (highest resource score)
+Elected coordinator: pbft-2 (highest resource score)
 Created federated round mnist-fl-workflow-xyz789:1 with schedule_id abc-123
 Node iot-0 joined federated round. 1/5 nodes submitted
 Node iot-1 joined federated round. 2/5 nodes submitted
@@ -309,19 +403,19 @@ Node iot-1 joined federated round. 2/5 nodes submitted
 ✓ Federated round ready with 5/5 nodes
 ```
 
-### 6.2 Monitor Workflow Execution
+### 7.2 Monitor Workflow Execution
 
 ```bash
 kubectl logs pbft-0 -c task-executor -f
 ```
 
-### 6.3 Monitor Individual Node Progress
+### 7.3 Monitor Individual Node Progress
 
 ```bash
 kubectl logs iot-0-xxxxx -c iot-node -f
 ```
 
-## Step 7: View Results
+## Step 8: View Results
 
 After 5 rounds, you should see output like:
 
@@ -353,9 +447,9 @@ Next Round Suggestions:
 
 ### Consensus-Integrated Federated Learning Components
 
-1. **Federated Schedule Transaction Processor** (Kubernetes pod)
-   - Runs automatically on the cluster
-   - Uses blockchain consensus to elect coordinators
+1. **Federated Schedule Transaction Processor** (Container in each compute node)
+   - Runs as a container within each compute node pod (pbft-0, pbft-1, pbft-2, pbft-3)
+   - Uses blockchain consensus to elect coordinators among compute nodes
    - Integrates with TrustMesh's existing scheduling architecture
    - Manages federated round coordination through consensus
 
@@ -400,14 +494,22 @@ Consensus-Coordinated Aggregation → Global Model → Evaluation → Results
 
 **1. Federated Schedule TP not starting**
 ```bash
-kubectl describe pod -l app=federated-schedule-tp
-kubectl logs -l app=federated-schedule-tp
+# Check compute node pods
+kubectl describe pod pbft-0
+kubectl describe pod pbft-1
+# Check federated-schedule-tp container logs in compute nodes
+kubectl logs pbft-0 -c federated-schedule-tp
+kubectl logs pbft-1 -c federated-schedule-tp
 ```
 
 **2. Nodes can't join federated round**
 - Ensure all nodes start within 5 minutes
-- Check federated schedule TP logs for round creation
+- Check federated schedule TP logs in compute nodes for round creation
 - Verify Redis connectivity and blockchain consensus
+```bash
+kubectl logs pbft-0 -c federated-schedule-tp | grep "federated round"
+kubectl logs pbft-1 -c federated-schedule-tp | grep "federated round"
+```
 
 **3. Low model accuracy**
 - Increase training epochs in task1_local_training/process.py
@@ -418,6 +520,11 @@ kubectl logs -l app=federated-schedule-tp
 - Verify application IDs in dependency graph
 - Check task executor logs on compute nodes
 - Ensure minimum node participation (3/5)
+
+**5. Pod not found errors**
+- Use `kubectl get pods` to find exact pod names
+- Replace `xxxxx` with actual pod suffixes in commands
+- IoT nodes may have different naming patterns
 
 ### Performance Tuning
 
@@ -451,7 +558,7 @@ chmod +x clean-k8s-environment.sh
 
 ✅ **Blockchain-Validated Coordination**: All federated round decisions validated through PBFT consensus
 
-✅ **Automatic Transaction Processor Deployment**: `build-and-deploy-network.sh` deploys federated-schedule-tp automatically
+✅ **Integrated Transaction Processor Deployment**: `build-and-deploy-network.sh` deploys federated-schedule-tp as part of each compute node
 
 ✅ **Resource-Aware Coordinator Election**: Uses existing LCDWRR algorithm for optimal coordinator selection
 
