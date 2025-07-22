@@ -310,26 +310,22 @@ items:"
                     done
                     echo \"CouchDB on couchdb-\${i} is ready\"
                   done &&
-                  echo \"Setting up CouchDB cluster using non-SSL port for initialization\" &&
-                  echo \"Step 1: Initialize cluster mode on coordinator node (port 5984)\" &&
-                  init_response=\$(curl -X POST \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_cluster_setup\" -H 'Content-Type: application/json' -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\": \\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\": \\\"\${COUCHDB_PASSWORD}\\\", \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
-                  echo \"Coordinator cluster initialization response: \${init_response}\" &&
-                  sleep 3 &&
-                  echo \"Step 2: Initialize cluster mode on remote nodes (port 5984)\" &&
+                  echo \"Setting up CouchDB cluster using original working method (HTTP init)\" &&
+                  echo \"Adding nodes to the cluster\" &&
                   for num in \$(seq 1 $((num_compute_nodes-1))); do
-                    echo \"Initializing cluster mode on couchdb-\${num}...\"
-                    remote_init=\$(curl -X POST \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${num}.default.svc.cluster.local:5984/_cluster_setup\" -H 'Content-Type: application/json' -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\": \\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\": \\\"\${COUCHDB_PASSWORD}\\\", \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
-                    echo \"Remote node couchdb-\${num} initialization response: \${remote_init}\"
+                    echo \"Enabling cluster on couchdb-\${num}...\"
+                    response=\$(curl -X POST -H 'Content-Type: application/json' \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 5984, \\\"node_count\\\": \\\"$num_compute_nodes\\\", \\\"remote_node\\\": \\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"remote_current_user\\\": \\\"\${COUCHDB_USER}\\\", \\\"remote_current_password\\\": \\\"\${COUCHDB_PASSWORD}\\\" }\")
+                    echo \"Enable cluster on couchdb-\${num} response: \${response}\"
+                    echo \"Adding node couchdb-\${num} to cluster...\"
+                    response=\$(curl -X POST -H 'Content-Type: application/json' \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_cluster_setup\" -d \"{\\\"action\\\": \\\"add_node\\\", \\\"host\\\":\\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"port\\\": 5984, \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\"}\")
+                    echo \"Adding node couchdb-\${num} response: \${response}\"
                     sleep 2
                   done &&
-                  sleep 5 &&
-                  echo \"Step 3: Adding remote nodes to cluster using _nodes API (port 5984)\" &&
-                  for num in \$(seq 1 $((num_compute_nodes-1))); do
-                    echo \"Adding couchdb-\${num} to cluster via _nodes API...\"
-                    add_response=\$(curl -X PUT \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_nodes/couchdb@couchdb-\${num}.default.svc.cluster.local\" -d '{}' -H 'Content-Type: application/json')
-                    echo \"Add node couchdb-\${num} response: \${add_response}\"
-                    sleep 3
-                  done &&
+                  echo \"Waiting for nodes to synchronize...\" &&
+                  sleep 10 &&
+                  echo \"Finishing cluster setup\" &&
+                  response=\$(curl --max-time 60 -X POST -H 'Content-Type: application/json' \"http://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:5984/_cluster_setup\" -d \"{\\\"action\\\": \\\"finish_cluster\\\"}\") &&
+                  echo \"Finish cluster response: \${response}\" &&
                   echo \"Waiting for cluster to stabilize...\" &&
                   sleep 10 &&
                   echo \"Checking cluster membership (via HTTPS)\" &&
