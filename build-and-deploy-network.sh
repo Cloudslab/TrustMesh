@@ -171,7 +171,7 @@ items:"
                       name: couchdb-secrets
                       key: COUCHDB_SECRET
                 - name: ERL_FLAGS
-                  value: \"-setcookie jT7egojgnPLzOncq9MQUzqwqHm6ZiPUU7xJfFLA8MA -couch_log level debug -kernel inet_dist_listen_min 9100 -kernel inet_dist_listen_max 9200\"
+                  value: \"-setcookie jT7egojgnPLzOncq9MQUzqwqHm6ZiPUU7xJfFLA8MA -couch_log level debug -kernel inet_dist_listen_min 9100 -kernel inet_dist_listen_max 9200 -proto_dist inet_tls -ssl_dist_optfile /opt/couchdb/etc/local.d/ssl_dist.conf\"
                 - name: NODENAME
                   value: \"couchdb-${i}.default.svc.cluster.local\"
               volumeMounts:
@@ -260,7 +260,24 @@ items:"
         cacertfile = /home/couchdb-certs/ca.crt
         verify_ssl = true
         tls_versions = [tlsv1, 'tlsv1.1', 'tlsv1.2', 'tlsv1.3']
-        ssl_log_level = debug"
+        ssl_log_level = debug
+        
+        [ssl_dist_opts]
+        certfile = /home/couchdb-certs/node${i}_crt
+        keyfile = /home/couchdb-certs/node${i}_key
+        cacertfile = /home/couchdb-certs/ca.crt
+        verify = verify_peer
+        server_name_indication = disable
+      ssl_dist.conf: |
+        [{server, [{certfile, \"/home/couchdb-certs/node${i}_crt\"},
+                   {keyfile, \"/home/couchdb-certs/node${i}_key\"},
+                   {cacertfile, \"/home/couchdb-certs/ca.crt\"},
+                   {verify, verify_peer},
+                   {fail_if_no_peer_cert, false}]},
+         {client, [{certfile, \"/home/couchdb-certs/node${i}_crt\"},
+                   {keyfile, \"/home/couchdb-certs/node${i}_key\"},
+                   {cacertfile, \"/home/couchdb-certs/ca.crt\"},
+                   {verify, verify_peer}]}]."
 
       done
 
@@ -293,15 +310,19 @@ items:"
                     done
                     echo \"CouchDB on couchdb-\${i} is ready\"
                   done &&
-                  echo \"Adding nodes to the cluster\" &&
+                  echo \"Configuring cluster mode on coordinator node\" &&
+                  coordinator_setup=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\") &&
+                  echo \"Coordinator setup response: \${coordinator_setup}\" &&
+                  echo \"Enabling cluster mode on remote nodes and adding to cluster\" &&
                   for num in \$(seq 1 $((num_compute_nodes-1))); do
-                    echo \"Enabling cluster on couchdb-\${num}...\"
-                    response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\", \\\"remote_node\\\": \\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"remote_current_user\\\": \\\"\${COUCHDB_USER}\\\", \\\"remote_current_password\\\": \\\"\${COUCHDB_PASSWORD}\\\" }\")
-                    echo \"Enable cluster on couchdb-\${num} response: \${response}\"
-                    echo \"Adding node couchdb-\${num} to cluster...\"
-                    response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"add_node\\\", \\\"host\\\":\\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"port\\\": 6984, \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\"}\")
-                    echo \"Adding node couchdb-\${num} response: \${response}\"
-                    sleep 2
+                    echo \"Enabling cluster on remote node couchdb-\${num}...\"
+                    remote_setup=\$(curl --cacert /certs/ca.crt --cert /certs/node\${num}_crt --key /certs/node\${num}_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${num}.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"enable_cluster\\\", \\\"bind_address\\\":\\\"0.0.0.0\\\", \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\", \\\"port\\\": 6984, \\\"node_count\\\": \\\"$num_compute_nodes\\\"}\")
+                    echo \"Remote node couchdb-\${num} setup response: \${remote_setup}\"
+                    sleep 3
+                    echo \"Adding remote node couchdb-\${num} to cluster from coordinator...\"
+                    add_response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -X POST -H 'Content-Type: application/json' \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/_cluster_setup\" -d \"{\\\"action\\\": \\\"add_node\\\", \\\"host\\\":\\\"couchdb-\${num}.default.svc.cluster.local\\\", \\\"port\\\": 6984, \\\"username\\\": \\\"\${COUCHDB_USER}\\\", \\\"password\\\":\\\"\${COUCHDB_PASSWORD}\\\"}\")
+                    echo \"Add node couchdb-\${num} response: \${add_response}\"
+                    sleep 3
                   done &&
                   echo \"Waiting for nodes to synchronize...\" &&
                   sleep 10 &&
