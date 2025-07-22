@@ -24,8 +24,11 @@ SCHEDULE_CONFIRMATION_FAMILY_NAME = 'schedule-confirmation'
 SCHEDULE_CONFIRMATION_FAMILY_VERSION = '1.0'
 STATUS_FAMILY_NAME = 'schedule-status'
 STATUS_FAMILY_VERSION = '1.0'
+FEDERATED_SCHEDULE_FAMILY_NAME = 'federated-schedule'
+FEDERATED_SCHEDULE_FAMILY_VERSION = '1.0'
 SCHEDULE_NAMESPACE = hashlib.sha512(SCHEDULE_CONFIRMATION_FAMILY_NAME.encode()).hexdigest()[:6]
 STATUS_NAMESPACE = hashlib.sha512(STATUS_FAMILY_NAME.encode()).hexdigest()[:6]
+FEDERATED_NAMESPACE = hashlib.sha512(FEDERATED_SCHEDULE_FAMILY_NAME.encode()).hexdigest()[:6]
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:6]
 
@@ -264,6 +267,10 @@ def generate_federated_schedule(workflow_id, schedule_id, source_url, source_pub
         )
         
         logger.info(f"Federated Schedule Result: {federated_schedule}")
+        
+        # Create federated round via blockchain transaction BEFORE submitting schedule
+        logger.info(f"Creating federated round transaction for workflow {workflow_id}")
+        create_federated_round_transaction(workflow_id, expected_nodes, min_nodes_required, schedule_id)
         
         # Submit the federated schedule
         with ThreadPoolExecutor() as executor:
@@ -734,6 +741,47 @@ async def _handle_federated_processing_error(workflow_id, schedule_id, app_id, e
         
     except Exception as secondary_error:
         logger.critical(f"Critical error in federated error handler: {secondary_error}")
+
+
+def create_federated_round_transaction(workflow_id, expected_nodes, min_nodes_required=3, schedule_id=None):
+    """Create a blockchain transaction to initialize a federated round via federated-schedule-tp"""
+    try:
+        logger.info(f"Creating federated round transaction for workflow {workflow_id}")
+        
+        payload = {
+            'action': 'create_federated_round',
+            'workflow_id': workflow_id,
+            'round_number': 1,
+            'expected_nodes': expected_nodes,
+            'min_nodes_required': min_nodes_required,
+            'schedule_id': schedule_id,
+            'coordinator_node': node_id,
+            'status': 'initializing',
+            'created_time': time.time()
+        }
+        
+        # Create transaction for federated-schedule transaction processor
+        federated_inputs = [FEDERATED_NAMESPACE]
+        federated_outputs = [FEDERATED_NAMESPACE]
+        
+        federated_txn = create_transaction(
+            FEDERATED_SCHEDULE_FAMILY_NAME, 
+            FEDERATED_SCHEDULE_FAMILY_VERSION, 
+            payload,
+            federated_inputs, 
+            federated_outputs
+        )
+        
+        # Create and submit batch
+        batch = create_batch([federated_txn])
+        result = submit_batch(batch)
+        
+        logger.info(f"Federated round transaction submitted for workflow {workflow_id}: {result}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error creating federated round transaction: {e}")
+        raise
 
 
 def main():

@@ -1115,50 +1115,7 @@ echo "$blockchain_network_yaml" > kubernetes-manifests/generated/blockchain-netw
 
 echo "Generated blockchain network deployment YAML has been saved to kubernetes-manifests/generated/blockchain-network-deployment.yaml"
 
-# Part 6: Generate federated-schedule transaction processor deployment
-generate_federated_schedule_tp_yaml() {
-    local docker_username=${DOCKER_USERNAME:-"murtazahr"}
-    cat << EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: federated-schedule-tp
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: federated-schedule-tp
-  template:
-    metadata:
-      labels:
-        app: federated-schedule-tp
-    spec:
-      containers:
-      - name: federated-schedule-tp
-        image: ${docker_username}/federated-schedule-tp:latest
-        env:
-        - name: VALIDATOR_URL
-          value: "tcp://sawtooth-validator:4004"
-        - name: REDIS_HOST
-          value: "redis-0.redis-service"
-        - name: REDIS_PORT
-          value: "6379"
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "200m"
-EOF
-}
-
-echo "Generating federated schedule transaction processor deployment..."
-federated_schedule_tp_yaml=$(generate_federated_schedule_tp_yaml)
-echo "$federated_schedule_tp_yaml" > kubernetes-manifests/generated/federated-schedule-tp-deployment.yaml
-echo "Generated federated schedule TP deployment YAML has been saved to kubernetes-manifests/generated/federated-schedule-tp-deployment.yaml"
-
-# Part 7: deploy network
+# Part 6: deploy network
 echo "Deploying Network"
 # Apply to kubernetes environment.
 kubectl apply -f kubernetes-manifests/generated/config-and-secrets.yaml
@@ -1166,15 +1123,11 @@ kubectl apply -f kubernetes-manifests/generated/couchdb-cluster-deployment.yaml
 kubectl apply -f kubernetes-manifests/static/local-docker-registry-deployment.yaml
 kubectl apply -f kubernetes-manifests/generated/blockchain-network-deployment.yaml
 
-# Deploy federated schedule transaction processor
-echo "Deploying Federated Schedule Transaction Processor..."
-kubectl apply -f kubernetes-manifests/generated/federated-schedule-tp-deployment.yaml
-
 echo "Script execution completed successfully."
 echo ""
 echo "🎉 TrustMesh network deployed with federated learning support!"
 echo ""
 echo "Next steps for MNIST Federated Learning:"
 echo "1. Build and deploy applications: Run the instructions in RUN_MNIST_FEDERATED_LEARNING.md"
-echo "2. Verify federated schedule TP: kubectl get pods -l app=federated-schedule-tp"
-echo "3. Check federated schedule TP logs: kubectl logs -l app=federated-schedule-tp"
+echo "2. Verify federated schedule TP is running on compute nodes: kubectl logs pbft-0-<pod-id> -c federated-schedule-tp"
+echo "3. Check compute nodes are ready: kubectl get pods -l name=pbft-0"
