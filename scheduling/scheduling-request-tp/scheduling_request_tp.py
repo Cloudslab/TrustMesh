@@ -298,7 +298,7 @@ class IoTScheduleTransactionHandler(TransactionHandler):
                 'round_number': 1,
                 'schedule_id': schedule_id,
                 'coordinator_node': coordinator_node,
-                'expected_nodes': ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4'],
+                'expected_nodes': os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(','),
                 'min_nodes_required': 3,
                 'status': 'initializing',
                 'created_time': time.time()

@@ -580,7 +580,7 @@ items:"
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
                 - name: REDIS_HOST
-                  value: \"redis-0.redis-service\"
+                  value: \"redis-cluster\"
                 - name: REDIS_PORT
                   value: \"6379\"
                 - name: REDIS_PASSWORD

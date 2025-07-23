@@ -238,7 +238,8 @@ def generate_federated_schedule(workflow_id, schedule_id, source_url, source_pub
         
         # Get federated configuration
         federated_config = dependency_graph.get('federated_config', {})
-        expected_nodes = federated_config.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4'])
+        default_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
+        expected_nodes = federated_config.get('expected_nodes', default_nodes)
         min_nodes_required = federated_config.get('min_nodes_required', 3)
         
         logger.info(f"Federated config - Expected nodes: {expected_nodes}, Min required: {min_nodes_required}")
