@@ -1154,12 +1154,12 @@ kind: Job
 metadata:
   name: mnist-validation-dataset-distributor
   labels:
-    job-name: mnist-validation-dataset
+    job-name: mnist-validation-dataset-distributor
 spec:
   template:
     metadata:
       labels:
-        job-name: mnist-validation-dataset
+        job-name: mnist-validation-dataset-distributor
     spec:
       containers:
         - name: validation-dataset-distributor
@@ -1207,7 +1207,7 @@ kubectl apply -f kubernetes-manifests/generated/blockchain-network-deployment.ya
 echo "Waiting for Redis cluster to be ready before distributing validation dataset..."
 sleep 30
 kubectl apply -f kubernetes-manifests/generated/mnist-validation-dataset-job.yaml
-wait_for_job mnist-validation-dataset
+wait_for_job mnist-validation-dataset-distributor
 
 echo "Script execution completed successfully."
 echo ""

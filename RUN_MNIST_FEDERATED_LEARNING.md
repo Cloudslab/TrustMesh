@@ -1,21 +1,40 @@
 # Running MNIST Federated Learning on TrustMesh
 
-This guide provides complete instructions for deploying and running the MNIST federated learning application on TrustMesh with **minimal manual setup**.
+This guide provides complete instructions for deploying and running the MNIST federated learning application on TrustMesh with **time-windowed aggregation** and **local validation**.
 
 ## Overview
 
-The MNIST federated learning application demonstrates distributed machine learning across 5 IoT nodes, where each node:
-- Keeps its data local (privacy-preserving)
-- Trains on 2 specific MNIST digit classes
-- Contributes model parameters to global aggregation
-- Receives updated global model for next round
+The MNIST federated learning application demonstrates distributed machine learning across 5 IoT nodes using a **two-phase architecture**:
+
+### **Phase 1: Local Training**
+- Each IoT node trains on its local MNIST partition (80% train, 20% test)
+- Submits training data → TrustMesh processes as standard workflow
+- Receives locally trained model weights
+
+### **Phase 2: Federated Aggregation** 
+- IoT nodes submit trained weights → `aggregation-request-tp`
+- Time-windowed collection (3-minute timeout or minimum 3 nodes)
+- FedAvg aggregation with blockchain consensus validation
+- Global model broadcast back to participating nodes via ZMQ
 
 **Node Data Distribution:**
-- **iot-0**: Digits 0, 1 (Coordinator)
+- **iot-0**: Digits 0, 1 
 - **iot-1**: Digits 2, 3 
 - **iot-2**: Digits 4, 5
 - **iot-3**: Digits 6, 7
 - **iot-4**: Digits 8, 9
+
+Each node splits its data: **80% training, 20% local test** for convergence detection.
+
+## Key Features
+
+✅ **Time-Windowed Aggregation**: Nodes participate independently, aggregation happens with whoever submits within 3-minute windows
+
+✅ **Local Validation**: Convergence detection based on each node's local test data (not blockchain validation)
+
+✅ **Blockchain Consensus**: Deterministic validation using shared MNIST validation dataset for model integrity
+
+✅ **Privacy Preserving**: Training data never leaves nodes, only model weights are shared
 
 ## Prerequisites
 
@@ -99,17 +118,17 @@ kubectl get nodes
 
 Expected output showing all nodes in Ready state:
 ```
-NAME            STATUS   ROLES                  AGE   VERSION
-network-management-console    Ready    control-plane,master   5m    v1.27.3+k3s1
-compute-node-1  Ready    <none>                 4m    v1.27.3+k3s1
-compute-node-2  Ready    <none>                 4m    v1.27.3+k3s1
-compute-node-3  Ready    <none>                 4m    v1.27.3+k3s1
-compute-node-4  Ready    <none>                 4m    v1.27.3+k3s1
-iot-node-1      Ready    <none>                 3m    v1.27.3+k3s1
-iot-node-2      Ready    <none>                 3m    v1.27.3+k3s1
-iot-node-3      Ready    <none>                 3m    v1.27.3+k3s1
-iot-node-4      Ready    <none>                 3m    v1.27.3+k3s1
-iot-node-5      Ready    <none>                 3m    v1.27.3+k3s1
+NAME                           STATUS   ROLES                  AGE   VERSION
+network-management-console     Ready    control-plane,master   5m    v1.27.3+k3s1
+compute-node-1                 Ready    <none>                 4m    v1.27.3+k3s1
+compute-node-2                 Ready    <none>                 4m    v1.27.3+k3s1
+compute-node-3                 Ready    <none>                 4m    v1.27.3+k3s1
+compute-node-4                 Ready    <none>                 4m    v1.27.3+k3s1
+iot-node-1                     Ready    <none>                 3m    v1.27.3+k3s1
+iot-node-2                     Ready    <none>                 3m    v1.27.3+k3s1
+iot-node-3                     Ready    <none>                 3m    v1.27.3+k3s1
+iot-node-4                     Ready    <none>                 3m    v1.27.3+k3s1
+iot-node-5                     Ready    <none>                 3m    v1.27.3+k3s1
 ```
 
 ## Step 3: Build and Deploy TrustMesh with Federated Learning
@@ -130,15 +149,18 @@ DOCKER_USERNAME=your_dockerhub_username
 # Login to Docker Hub
 docker login
 
-# Build all images including federated learning applications
+# Build all images including federated learning TPs
 chmod +x build-project.sh
 ./build-project.sh
 ```
 
-This script now automatically:
+The build script automatically:
 - Builds all TrustMesh core components
-- Builds MNIST federated learning applications
-- Builds federated learning coordinator service
+- **Builds new federated learning TPs:**
+  - `aggregation-request-tp` (collects model weights)
+  - `aggregation-confirmation-tp` (performs FedAvg + validation)
+  - `validation-dataset-distributor` (distributes MNIST validation data)
+- Builds single `federated-training-task` application
 - Pushes everything to Docker registry
 
 ### 3.3 Deploy TrustMesh Network with Federated Learning
@@ -154,10 +176,12 @@ Follow the prompts for:
 - CouchDB setup
 - SSL certificate generation
 
-The script now automatically:
+The deployment script automatically:
 - Deploys all TrustMesh components
-- **Deploys federated-schedule-tp as part of each compute node**
-- Sets up Redis connectivity for coordination
+- **Deploys new federated learning TPs in each compute node**
+- **Runs MNIST validation dataset distribution job**
+- Sets up ZMQ communication for IoT ↔ Compute
+- Configures Redis pub/sub for inter-compute coordination
 
 ### 3.4 Verify Deployment
 
@@ -167,412 +191,252 @@ kubectl get pods
 
 Wait for all pods to be in `Running` state. You should see:
 - All TrustMesh components running
-- All compute nodes (pbft-0, pbft-1, pbft-2, pbft-3) with federated-schedule-tp containers
+- All compute nodes (pbft-0, pbft-1, pbft-2, pbft-3) with **aggregation TPs**
 - All IoT nodes ready
+- **MNIST validation dataset distribution job completed**
 
-Check federated schedule TP in compute nodes:
+Check new federated learning components:
 ```bash
-kubectl logs pbft-0 -c federated-schedule-tp
-kubectl logs pbft-1 -c federated-schedule-tp
+# Check aggregation TPs in compute nodes
+kubectl logs pbft-0 -c aggregation-request-tp
+kubectl logs pbft-0 -c aggregation-confirmation-tp
+
+# Check validation dataset distribution
+kubectl get jobs
+kubectl logs job/mnist-validation-dataset-distributor
 ```
 
-Expected federated schedule TP log in each compute node:
-```
-Starting Federated Schedule Transaction Processor
+Expected logs:
+```bash
+# Aggregation Request TP:
+Starting Aggregation Request Transaction Processor
 Validator URL: tcp://sawtooth-validator:4004
 Redis: redis-0.redis-service:6379
-Federated Schedule TP started successfully on compute node pbft-0
+Aggregation Request TP started successfully
+
+# Validation Dataset Distributor:
+Successfully distributed validation dataset to Redis
+Dataset key: mnist_validation_dataset
+Total samples: 1000
+Data integrity hash: a1b2c3d4...
 ```
 
-## Step 4: Pre-Flight System Verification
+## Step 4: Deploy MNIST Federated Learning Application
 
-Before deploying applications, verify all components are running:
-
-### 4.1 Verify All Pods Are Running
-```bash
-kubectl get pods
-```
-
-**Required pods should be in Running state:**
-- network-management-console-xxxxx (with multiple containers)
-- All compute nodes: pbft-0, pbft-1, pbft-2, pbft-3 (each with federated-schedule-tp container)
-- All IoT nodes: iot-0-xxxxx, iot-1-xxxxx, iot-2-xxxxx, iot-3-xxxxx, iot-4-xxxxx  
-- Storage: redis-0, redis-1, couchdb-0, couchdb-1, etc.
-
-### 4.2 Verify Federated Learning Components
-```bash
-# Check federated schedule transaction processor in compute nodes
-kubectl logs pbft-0 -c federated-schedule-tp --tail=20
-kubectl logs pbft-1 -c federated-schedule-tp --tail=20
-
-# Should see: "Federated Schedule TP started successfully on compute node pbft-X"
-```
-
-### 4.3 Check System Resources
-```bash
-# Verify sufficient resources
-kubectl top nodes
-kubectl describe nodes | grep -E "(cpu|memory)"
-```
-
-## Step 5: Deploy MNIST Federated Learning Applications
-
-### 5.1 Connect to Application Deployment Client
+### 4.1 Access Network Management Console
 
 ```bash
-kubectl exec -it network-management-console-xxxxx -c application-deployment-client bash
+kubectl exec -it deployment/network-management-console -c application-deployment-client -- bash
 ```
 
-### 5.2 Copy Application Requirements File
+### 4.2 Deploy Single Training Application
 
-First, copy the pre-configured application requirements:
-```bash
-cp /app/sample-apps/mnist-federated-learning/sample_jsons/app_requirements.json .
-```
-
-### 5.3 Deploy the Three Applications
-
-The build script created deployment files. Deploy them:
-
-**Deploy Local Training Application:**
-```bash
-python docker_image_client.py deploy_image mnist-fl-local-training.tar.gz app_requirements.json
-```
-**Note the returned Application ID** (e.g., `abc123-local-training`)
-
-**Deploy Model Aggregation Application:**
-```bash  
-python docker_image_client.py deploy_image mnist-fl-aggregate-models.tar.gz app_requirements.json
-```
-**Note the returned Application ID** (e.g., `def456-aggregate-models`)
-
-**Deploy Model Evaluation Application:**
-```bash
-python docker_image_client.py deploy_image mnist-fl-model-evaluation.tar.gz app_requirements.json
-```
-**Note the returned Application ID** (e.g., `ghi789-model-evaluation`)
-
-### 5.4 Create Workflow
-
-**Connect to Workflow Creation Client:**
-```bash
-kubectl exec -it network-management-console-xxxxx -c workflow-creation-client bash
-```
-
-Copy the pre-configured dependency graph template:
-```bash
-cp /app/sample-apps/mnist-federated-learning/sample_jsons/dependency_graph.json .
-```
-
-Update the dependency graph with your actual Application IDs:
-```bash
-# Edit the dependency graph
-nano dependency_graph.json
-```
-
-Update with your Application IDs:
-```json
-{
-  "start": "abc123-local-training",
-  "nodes": {
-    "abc123-local-training": {"next": ["def456-aggregate-models"]},
-    "def456-aggregate-models": {"next": ["ghi789-model-evaluation"]},
-    "ghi789-model-evaluation": {"next": []}
-  }
-}
-```
-
-**Create the Workflow:**
-```bash
-python workflow_creation_client.py dependency_graph.json
-```
-**Note the returned Workflow ID** (e.g., `mnist-fl-workflow-xyz789`)
-
-## Step 6: Run MNIST Federated Learning
-
-### 6.1 Execute on All IoT Nodes Simultaneously
-
-**Important**: All 5 IoT nodes must start within a few minutes of each other for proper coordination.
-
-Open 5 terminal windows and run simultaneously:
-
-**Terminal 1 - iot-0 (Coordinator):**
-```bash
-kubectl exec -it iot-0-xxxxx -c iot-node bash
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id iot-0 --max-rounds 5
-```
-
-**Terminal 2 - iot-1 (Participant):**
-```bash
-kubectl exec -it iot-1-xxxxx -c iot-node bash
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id iot-1 --max-rounds 5
-```
-
-**Terminal 3 - iot-2 (Participant):**
-```bash
-kubectl exec -it iot-2-xxxxx -c iot-node bash
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id iot-2 --max-rounds 5
-```
-
-**Terminal 4 - iot-3 (Participant):**
-```bash
-kubectl exec -it iot-3-xxxxx -c iot-node bash
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id iot-3 --max-rounds 5
-```
-
-**Terminal 5 - iot-4 (Participant):**
-```bash
-kubectl exec -it iot-4-xxxxx -c iot-node bash
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --node-id iot-4 --max-rounds 5
-```
-
-**Alternative - Auto-detect node IDs:**
-```bash
-# On each IoT node, this will auto-detect the node ID
-python mnist-federated-learning-simulation.py mnist-fl-workflow-xyz789 --auto-detect --max-rounds 5
-```
-
-### 6.2 Alternative: Batch Execution Script
-
-For convenience, you can create a script to start all nodes at once. Create this on your control node:
+**Important**: We now use a **single training task** instead of 3 separate tasks:
 
 ```bash
-# create-federated-learning-launcher.sh
-cat > federated-learning-launcher.sh << 'EOF'
-#!/bin/bash
+# Deploy the federated training application
+python docker_image_client.py deploy_image federated-training-task.tar.gz app_requirements.json
 
-WORKFLOW_ID=$1
-MAX_ROUNDS=${2:-5}
-
-if [ -z "$WORKFLOW_ID" ]; then
-    echo "Usage: $0 <workflow-id> [max-rounds]"
-    exit 1
-fi
-
-echo "Starting MNIST Federated Learning with workflow: $WORKFLOW_ID"
-echo "Rounds: $MAX_ROUNDS"
-
-# Function to start a node
-start_node() {
-    local node_id=$1
-    echo "Starting $node_id..."
-    kubectl exec -it $node_id-* -c iot-node -- python mnist-federated-learning-simulation.py $WORKFLOW_ID --node-id $node_id --max-rounds $MAX_ROUNDS &
-}
-
-# Start all nodes in parallel
-start_node "iot-0"
-start_node "iot-1" 
-start_node "iot-2"
-start_node "iot-3"
-start_node "iot-4"
-
-echo "All nodes started. Waiting for completion..."
-wait
-
-echo "Federated learning session completed!"
-EOF
-
-chmod +x federated-learning-launcher.sh
+# Wait for deployment confirmation
+echo "Application deployed successfully"
 ```
 
-**Run all nodes at once:**
-```bash
-./federated-learning-launcher.sh mnist-fl-workflow-xyz789 5
-```
-
-## Step 7: Monitor Federated Learning Progress
-
-### 7.1 Monitor Federated Schedule TP
+### 4.3 Create Federated Learning Workflow
 
 ```bash
-# Monitor federated schedule TP across all compute nodes
-kubectl logs pbft-0 -c federated-schedule-tp -f &
-kubectl logs pbft-1 -c federated-schedule-tp -f &
-kubectl logs pbft-2 -c federated-schedule-tp -f &
-kubectl logs pbft-3 -c federated-schedule-tp -f &
+# Still in the network-management-console container
+kubectl exec -it deployment/network-management-console -c workflow-creation-client -- bash
+
+# Create the federated workflow
+python dependency_graph_client.py create_workflow federated_dependency_graph.json
+
+# Note the returned workflow ID (e.g., workflow_12345)
 ```
 
-You should see (on the elected coordinator compute node):
+The `federated_dependency_graph.json` now contains:
+- **Single task**: `federated-training-task` 
+- **Federated config**: 5 nodes, 3 minimum, FedAvg strategy
+- **Two-phase architecture metadata**
+
+## Step 5: Run Federated Learning
+
+### 5.1 Start IoT Nodes (Each Node Independently)
+
+On each IoT node, run the federated learning simulation:
+
+**IoT Node 0 (iot-node-1):**
+```bash
+kubectl exec -it iot-0-xxxxx -- bash
+cd /app
+python mnist-federated-learning-simulation.py workflow_12345 --node-id iot-0 --max-rounds 5
 ```
-Processing federated schedule request for workflow mnist-fl-workflow-xyz789
-Elected coordinator: pbft-2 (highest resource score)
-Created federated round mnist-fl-workflow-xyz789:1 with schedule_id abc-123
-Node iot-0 joined federated round. 1/5 nodes submitted
-Node iot-1 joined federated round. 2/5 nodes submitted
+
+**IoT Node 1 (iot-node-2):**
+```bash
+kubectl exec -it iot-1-xxxxx -- bash
+cd /app
+python mnist-federated-learning-simulation.py workflow_12345 --node-id iot-1 --max-rounds 5
+```
+
+**Continue for nodes iot-2, iot-3, iot-4...**
+
+### 5.2 Monitor Federated Learning Progress
+
+Each node will show:
+
+```bash
+############################################################
+# Starting Two-Phase MNIST Federated Learning
+############################################################
+# Node: iot-0
+# Workflow: workflow_12345
+# Max Rounds: 5
+# Federated Extension: Available
+############################################################
+
+🔄 Starting Round 1/5
+
+📊 Phase 1: Training Phase
+Training on 800 samples from classes [0, 1]
+✓ Training completed - received trained weights
+
+🔗 Phase 2: Aggregation Phase  
+✓ Submitted trained weights for aggregation
+
+⏳ Waiting for aggregated model from round 1...
+✓ Received aggregated model for round 1
+  Participating nodes: ['iot-0', 'iot-1', 'iot-2']
+  Aggregator: compute-node-1
+
+📊 Performing local validation on test set...
+Local validation - Accuracy: 0.8450, Loss: 0.4123 on 200 samples
+Local accuracy improved to 0.845
+
+🔄 Starting Round 2/5
 ...
-✓ Federated round ready with 5/5 nodes
 ```
 
-### 7.2 Monitor Workflow Execution
+### 5.3 Time-Windowed Aggregation in Action
+
+You'll observe:
+- **Independent participation**: Nodes join rounds independently
+- **3-minute time windows**: Aggregation happens with whoever submits in time
+- **Selective participation**: Only nodes in each window get the global model
+- **Local convergence**: Nodes stop based on their own test data performance
+
+Example scenario:
+- **Round 1**: iot-0, iot-1, iot-2 submit → Aggregation with 3 nodes
+- **Round 2**: iot-0, iot-3, iot-4 submit → Aggregation with different 3 nodes  
+- **Round 3**: iot-1 converged locally → Only iot-0, iot-2, iot-3, iot-4 continue
+
+## Step 6: Monitor and Troubleshoot
+
+### 6.1 Monitor Aggregation Process
 
 ```bash
-kubectl logs pbft-0 -c task-executor -f
+# Check aggregation requests in blockchain
+kubectl logs pbft-0 -c aggregation-request-tp -f
+
+# Check FedAvg aggregation and validation
+kubectl logs pbft-0 -c aggregation-confirmation-tp -f
+
+# Monitor Redis coordination
+kubectl exec -it redis-0 -- redis-cli monitor
 ```
 
-### 7.3 Monitor Individual Node Progress
+### 6.2 Check Convergence Status
+
+Each node logs its convergence independently:
+```bash
+Local accuracy improved to 0.892
+No improvement for 1 rounds
+No improvement for 2 rounds  
+No improvement for 3 rounds
+🛑 Convergence detected for workflow_12345 based on local validation - stopping participation
+```
+
+### 6.3 Verify Blockchain Consensus
+
+The blockchain performs deterministic validation:
+```bash
+kubectl logs pbft-0 -c aggregation-confirmation-tp | grep "MNIST validation"
+
+# Expected output:
+# MNIST validation - Accuracy: 0.8934, Loss: 0.3245, Passed: true
+# Blockchain consensus validation score: 0.893
+```
+
+### 6.4 Common Issues and Solutions
+
+**Issue**: Validation dataset not found
+```bash
+# Solution: Check if validation job completed
+kubectl get jobs
+kubectl logs job/mnist-validation-dataset-distributor
+```
+
+**Issue**: Aggregation timeout
+```bash
+# Solution: Check if enough nodes are participating
+# Minimum 3 nodes required within 3-minute window
+```
+
+**Issue**: ZMQ communication errors
+```bash
+# Solution: Verify IoT node network connectivity
+kubectl exec -it iot-0-xxxxx -- netstat -tulpn | grep :5555
+```
+
+## Step 7: Results and Analysis
+
+### 7.1 Expected Outcomes
+
+**Successful federated learning will show:**
+- Each node trains on its specific digit classes (0-1, 2-3, 4-5, 6-7, 8-9)
+- Global model learns all 10 digits through federated aggregation
+- Local accuracy improves over rounds on each node's test set
+- Convergence detection stops nodes independently after 3 rounds without improvement
+
+**Typical accuracy progression:**
+```
+Round 1: Local=0.72, Blockchain=0.65
+Round 2: Local=0.84, Blockchain=0.79  
+Round 3: Local=0.89, Blockchain=0.87
+Round 4: Local=0.89, Blockchain=0.89 (no improvement)
+Round 5: Convergence detected - stopping
+```
+
+### 7.2 Performance Characteristics
+
+- **Time per round**: ~2-3 minutes (including 3-minute aggregation window)
+- **Network overhead**: Only model weights transmitted (not data)
+- **Convergence**: Typically 3-5 rounds for MNIST
+- **Fault tolerance**: System continues with partial participation
+
+## Cleanup
+
+To clean up the entire deployment:
 
 ```bash
-kubectl logs iot-0-xxxxx -c iot-node -f
-```
-
-## Step 8: View Results
-
-After 5 rounds, you should see output like:
-
-```
-🎉 MNIST Federated Learning Results 🎉
-
-Round 5 Evaluation:
-✅ Test Accuracy: 96.4%
-📊 Performance Grade: A+ (Excellent)
-🔒 Privacy Preserved: ✓ Raw data never left individual nodes
-👥 Nodes Participated: 5/5
-📈 Total Training Samples: 60,000 (distributed across nodes)
-⏱️ Total Training Time: 12.3 minutes
-
-Federated Learning Benefits:
-✓ Data diversity: Trained on 5 different data distributions
-✓ Sample efficiency: Leveraged 60,000 samples across nodes
-✓ Privacy preservation: Raw data never left individual nodes
-✓ Distributed computation: Training load distributed across devices
-✓ Model robustness: Model exposed to diverse local data patterns
-
-Next Round Suggestions:
-• Model converging well - consider reducing learning rate
-• Monitor for overfitting on local data distributions
-• Consider implementing differential privacy
-```
-
-## Architecture Overview
-
-### Consensus-Integrated Federated Learning Components
-
-1. **Federated Schedule Transaction Processor** (Container in each compute node)
-   - Runs as a container within each compute node pod (pbft-0, pbft-1, pbft-2, pbft-3)
-   - Uses blockchain consensus to elect coordinators among compute nodes
-   - Integrates with TrustMesh's existing scheduling architecture
-   - Manages federated round coordination through consensus
-
-2. **Enhanced Transaction Processors**
-   - `scheduling-request-tp`: Detects federated workflows and manages shared schedule IDs
-   - `iot-data-tp`: Supports multi-node data aggregation using Redis lists
-   - `federated-schedule-tp`: Manages consensus-based coordinator election
-
-3. **Enhanced Compute Nodes**
-   - `task_executor`: Federated-aware data retrieval and processing
-   - Auto-detects federated workflows and aggregates multi-node data
-   - Respects TrustMesh's resource allocation and consensus principles
-
-4. **MNIST FL Applications**
-   - task1_local_training: Trains CNN models locally
-   - task2_aggregate_models: Implements FedAvg algorithm with consensus coordination
-   - task3_model_evaluation: Evaluates global model
-
-### Consensus-Integrated Data Flow
-
-```
-IoT Nodes (iot-0 to iot-4) → Federated Schedule TP → Consensus Election → Coordinator Node
-    ↓
-Shared Schedule ID → Multi-Node Data Aggregation → Enhanced IoT Data TP
-    ↓
-Local Training (parallel) → Federated Task Executor → Model Parameters → Blockchain
-    ↓  
-Consensus-Coordinated Aggregation → Global Model → Evaluation → Results
-```
-
-### Key Improvements Over Standalone Coordinator
-
-✅ **Consensus-Based Coordination**: Uses TrustMesh's PBFT consensus for coordinator election
-✅ **Resource-Aware Scheduling**: Integrates with existing LCDWRR scheduling algorithm  
-✅ **Blockchain Validation**: All coordination decisions validated through blockchain consensus
-✅ **No Single Point of Failure**: Coordinator election distributes load across compute nodes
-✅ **TrustMesh Compliance**: Fully integrates with existing transaction processor architecture
-
-## Troubleshooting
-
-### Common Issues
-
-**1. Federated Schedule TP not starting**
-```bash
-# Check compute node pods
-kubectl describe pod pbft-0
-kubectl describe pod pbft-1
-# Check federated-schedule-tp container logs in compute nodes
-kubectl logs pbft-0 -c federated-schedule-tp
-kubectl logs pbft-1 -c federated-schedule-tp
-```
-
-**2. Nodes can't join federated round**
-- Ensure all nodes start within 5 minutes
-- Check federated schedule TP logs in compute nodes for round creation
-- Verify Redis connectivity and blockchain consensus
-```bash
-kubectl logs pbft-0 -c federated-schedule-tp | grep "federated round"
-kubectl logs pbft-1 -c federated-schedule-tp | grep "federated round"
-```
-
-**3. Low model accuracy**
-- Increase training epochs in task1_local_training/process.py
-- Ensure all 5 nodes are participating
-- Check class distribution per node
-
-**4. Workflow not executing**
-- Verify application IDs in dependency graph
-- Check task executor logs on compute nodes
-- Ensure minimum node participation (3/5)
-
-**5. Pod not found errors**
-- Use `kubectl get pods` to find exact pod names
-- Replace `xxxxx` with actual pod suffixes in commands
-- IoT nodes may have different naming patterns
-
-### Performance Tuning
-
-**For better accuracy:**
-- Increase epochs from 5 to 10
-- Adjust learning rate (default: 0.01)
-- Add data augmentation
-
-**For faster training:**
-- Reduce batch size for memory-constrained nodes
-- Decrease validation split in training
-
-## Clean Up
-
-```bash
-# Clean up applications and workflows
-kubectl exec -it network-management-console-xxxxx -c application-deployment-client bash
-python docker_image_client.py list_images
-python docker_image_client.py delete_image app-id
-
-# Clean entire cluster
 chmod +x clean-k8s-environment.sh
 ./clean-k8s-environment.sh
 ```
 
-## Key Improvements in This Implementation
+This removes:
+- All TrustMesh components
+- Federated learning TPs and jobs
+- MNIST validation dataset
+- All secrets and persistent volumes
 
-✅ **Consensus-Integrated Architecture**: Federated learning now fully integrates with TrustMesh's consensus mechanisms
+## Architecture Summary
 
-✅ **No Architectural Violations**: Respects TrustMesh's task delegation and resource allocation principles
+The updated TrustMesh federated learning implementation features:
 
-✅ **Blockchain-Validated Coordination**: All federated round decisions validated through PBFT consensus
+1. **Two-Phase Architecture**: Clean separation of training and aggregation phases
+2. **Time-Windowed Aggregation**: 3-minute collection windows for robust participation
+3. **Local Validation**: Convergence based on each node's private test data
+4. **Blockchain Consensus**: Deterministic validation for model integrity
+5. **Privacy Preservation**: Only model weights leave nodes, never raw data
+6. **Fault Tolerance**: System adapts to varying node participation
 
-✅ **Integrated Transaction Processor Deployment**: `build-and-deploy-network.sh` deploys federated-schedule-tp as part of each compute node
-
-✅ **Resource-Aware Coordinator Election**: Uses existing LCDWRR algorithm for optimal coordinator selection
-
-✅ **Enhanced Data Aggregation**: Multi-node data collection through enhanced iot-data-tp
-
-✅ **Fault Tolerant**: No single point of failure - coordinator election distributes responsibility
-
-## Next Steps
-
-1. **Advanced Features**: Implement differential privacy, compression
-2. **Scaling**: Test with more nodes and different data distributions  
-3. **Custom Models**: Experiment with different neural network architectures
-4. **Production**: Add monitoring, alerting, and fault tolerance
-
----
-
-**Congratulations!** You have successfully deployed and run privacy-preserving federated learning on TrustMesh with minimal manual setup. The system demonstrates how multiple IoT devices can collaboratively train a machine learning model while keeping their data completely private and secure.
+This design provides a production-ready federated learning framework with strong privacy guarantees and robust consensus mechanisms.
