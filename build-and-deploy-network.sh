@@ -338,13 +338,15 @@ items:"
                     response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\$db\")
                     echo \"Creating \$db response: \${response}\"
                   done &&
-                  echo \"Creating application databases (\${RESOURCE_REGISTRY_DB} and \${TASK_DATA_DB})\" &&
+                  echo \"Creating application databases (\${RESOURCE_REGISTRY_DB}, \${TASK_DATA_DB}, and \${VALIDATION_DATASETS_DB})\" &&
                   response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\${RESOURCE_REGISTRY_DB}\") &&
                   echo \"Creating \${RESOURCE_REGISTRY_DB} response: \${response}\" &&
                   response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\${TASK_DATA_DB}\") &&
                   echo \"Creating \${TASK_DATA_DB} response: \${response}\" &&
-                  echo \"Waiting for \${RESOURCE_REGISTRY_DB} & \${TASK_DATA_DB} to be available on all nodes\" &&
-                  for db in \${RESOURCE_REGISTRY_DB} \${TASK_DATA_DB}; do
+                  response=\$(curl --cacert /certs/ca.crt --cert /certs/node0_crt --key /certs/node0_key -s -X PUT \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-0.default.svc.cluster.local:6984/\${VALIDATION_DATASETS_DB}\") &&
+                  echo \"Creating \${VALIDATION_DATASETS_DB} response: \${response}\" &&
+                  echo \"Waiting for \${RESOURCE_REGISTRY_DB}, \${TASK_DATA_DB} & \${VALIDATION_DATASETS_DB} to be available on all nodes\" &&
+                  for db in \${RESOURCE_REGISTRY_DB} \${TASK_DATA_DB} \${VALIDATION_DATASETS_DB}; do
                     for i in \$(seq 0 $((num_compute_nodes-1))); do
                       until curl --cacert /certs/ca.crt --cert /certs/node\${i}_crt --key /certs/node\${i}_key -s \"https://\${COUCHDB_USER}:\${COUCHDB_PASSWORD}@couchdb-\${i}.default.svc.cluster.local:6984/\${db}\" | grep -q \"\${db}\"; do
                         echo \"Waiting for \${db} on couchdb-\${i}...\"
@@ -353,12 +355,14 @@ items:"
                       echo \"\${db} is available on couchdb-\${i}\"
                     done
                   done &&
-                  echo \"CouchDB cluster setup completed and \${RESOURCE_REGISTRY_DB}, \${TASK_DATA_DB} databases are available on all nodes\"
+                  echo \"CouchDB cluster setup completed and \${RESOURCE_REGISTRY_DB}, \${TASK_DATA_DB}, \${VALIDATION_DATASETS_DB} databases are available on all nodes\"
               env:
                 - name: RESOURCE_REGISTRY_DB
                   value: \"resource_registry\"
                 - name: TASK_DATA_DB
                   value: \"task_data\"
+                - name: VALIDATION_DATASETS_DB
+                  value: \"validation_datasets\"
                 - name: COUCHDB_USER
                   valueFrom:
                     secretKeyRef:
@@ -443,12 +447,14 @@ items:"
                       echo \"\${db} is available on couchdb-\${i}\"
                     done
                   done &&
-                  echo \"CouchDB cluster setup completed and \${RESOURCE_REGISTRY_DB} & \${TASK_DATA_DB} is available on all nodes\"
+                  echo \"CouchDB cluster setup completed and \${RESOURCE_REGISTRY_DB}, \${TASK_DATA_DB} & \${VALIDATION_DATASETS_DB} are available on all nodes\"
               env:
                 - name: RESOURCE_REGISTRY_DB
                   value: \"resource_registry\"
                 - name: TASK_DATA_DB
                   value: \"task_data\"
+                - name: VALIDATION_DATASETS_DB
+                  value: \"validation_datasets\"
                 - name: COUCHDB_USER
                   valueFrom:
                     secretKeyRef:

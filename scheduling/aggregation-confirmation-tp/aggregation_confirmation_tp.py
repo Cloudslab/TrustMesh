@@ -17,8 +17,19 @@ from tensorflow.keras import layers
 from sawtooth_sdk.processor.handler import TransactionHandler
 from sawtooth_sdk.processor.exceptions import InvalidTransaction
 from sawtooth_sdk.processor.core import TransactionProcessor
+from ibmcloudant.cloudant_v1 import CloudantV1
+from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
 from coredis import RedisCluster
 from coredis.exceptions import RedisError
+
+# CouchDB configuration (primary storage for validation dataset)
+COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
+COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
+COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
+COUCHDB_DB = 'validation_datasets'
+COUCHDB_SSL_CA = os.getenv('COUCHDB_SSL_CA')
+COUCHDB_SSL_CERT = os.getenv('COUCHDB_SSL_CERT')
+COUCHDB_SSL_KEY = os.getenv('COUCHDB_SSL_KEY')
 
 # Redis configuration
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
@@ -38,7 +49,7 @@ CONFIRMATION_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
 VALIDATION_SEED = 42  # Fixed seed for deterministic validation
 MIN_ACCURACY_THRESHOLD = 0.1  # Minimum acceptable accuracy
 MAX_WEIGHT_MAGNITUDE = 10.0  # Maximum allowed weight magnitude
-VALIDATION_DATASET_KEY = "mnist_validation_dataset"
+VALIDATION_DATASET_DOC_ID = "mnist_validation_dataset"
 VALIDATION_METADATA_KEY = "mnist_validation_metadata"
 
 # Model configuration (must match training task)
@@ -51,7 +62,10 @@ logger = logging.getLogger(__name__)
 class AggregationConfirmationTransactionHandler(TransactionHandler):
     def __init__(self):
         self.redis = None
+        self.couchdb_client = None
+        self.couchdb_certs = []
         self.loop = asyncio.get_event_loop()
+        self._initialize_couchdb()
         self._initialize_redis()
 
     @property
@@ -123,6 +137,66 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                     logger.debug(f"Temporary file deleted: {file_path}")
                 except Exception as e:
                     logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+
+    def _initialize_couchdb(self):
+        """Initialize CouchDB connection following existing patterns"""
+        logger.info("Starting CouchDB initialization for aggregation confirmation TP")
+        try:
+            authenticator = BasicAuthenticator(COUCHDB_USERNAME, COUCHDB_PASSWORD)
+            self.couchdb_client = CloudantV1(authenticator=authenticator)
+            self.couchdb_client.set_service_url(COUCHDB_URL)
+
+            cert_files = None
+
+            if COUCHDB_SSL_CA:
+                ca_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                ca_file.write(COUCHDB_SSL_CA)
+                ca_file.flush()
+                self.couchdb_certs.append(ca_file)
+                ssl_verify = ca_file.name
+            else:
+                logger.warning("COUCHDB_SSL_CA is empty or not set")
+                ssl_verify = False
+
+            if COUCHDB_SSL_CERT and COUCHDB_SSL_KEY:
+                cert_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                key_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.key', delete=False)
+                cert_file.write(COUCHDB_SSL_CERT)
+                key_file.write(COUCHDB_SSL_KEY)
+                cert_file.flush()
+                key_file.flush()
+                self.couchdb_certs.extend([cert_file, key_file])
+                cert_files = (cert_file.name, key_file.name)
+            else:
+                logger.warning("COUCHDB_SSL_CERT or COUCHDB_SSL_KEY is empty or not set")
+
+            # Set the SSL configuration for the client
+            self.couchdb_client.set_http_config({
+                'verify': ssl_verify,
+                'cert': cert_files
+            })
+
+            # Test connection by checking if database exists
+            try:
+                self.couchdb_client.get_database_information(db=COUCHDB_DB).get_result()
+                logger.info(f"Successfully connected to CouchDB database '{COUCHDB_DB}'")
+            except Exception as db_error:
+                logger.warning(f"Database '{COUCHDB_DB}' not accessible: {db_error}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize CouchDB connection: {str(e)}")
+            self.cleanup_temp_files()
+            raise
+
+    def cleanup_temp_files(self):
+        """Clean up temporary certificate files"""
+        for cert_file in self.couchdb_certs:
+            try:
+                cert_file.close()
+                os.unlink(cert_file.name)
+                logger.debug(f"Cleaned up temporary cert file: {cert_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up cert file: {e}")
 
     def apply(self, transaction, context):
         logger.info("Entering apply method for aggregation confirmation")
@@ -607,21 +681,18 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
         return model
 
     async def _get_validation_dataset(self) -> Dict:
-        """Retrieve validation dataset from Redis"""
+        """Retrieve validation dataset from CouchDB"""
         try:
-            # Get validation dataset from Redis
-            stored_data = await self.redis.get(VALIDATION_DATASET_KEY)
-            if not stored_data:
-                logger.warning("Validation dataset not found in Redis")
+            # Get validation dataset from CouchDB
+            stored_doc = self.couchdb_client.get_document(db=COUCHDB_DB, doc_id=VALIDATION_DATASET_DOC_ID).get_result()
+            if not stored_doc:
+                logger.warning("Validation dataset not found in CouchDB")
                 return None
             
-            # Parse JSON data
-            dataset = json.loads(stored_data)
-            
             # Verify data integrity
-            x_data = np.array(dataset['x_data'])
-            y_data = np.array(dataset['y_data'])
-            metadata = dataset['metadata']
+            x_data = np.array(stored_doc['x_data'])
+            y_data = np.array(stored_doc['y_data'])
+            metadata = stored_doc['metadata']
             
             # Check hashes for data integrity
             data_hash = hashlib.sha256(x_data.tobytes()).hexdigest()
@@ -629,11 +700,15 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 logger.error("Validation dataset integrity check failed")
                 return None
             
-            logger.info(f"Retrieved validation dataset: {len(x_data)} samples")
-            return dataset
+            logger.info(f"Retrieved validation dataset from CouchDB: {len(x_data)} samples")
+            return {
+                'x_data': stored_doc['x_data'],
+                'y_data': stored_doc['y_data'],
+                'metadata': metadata
+            }
             
         except Exception as e:
-            logger.error(f"Error retrieving validation dataset: {e}")
+            logger.error(f"Error retrieving validation dataset from CouchDB: {e}")
             return None
 
 
@@ -653,6 +728,7 @@ def main():
         logger.error(traceback.format_exc())
     finally:
         logger.info("Stopping processor")
+        handler.cleanup_temp_files()
         processor.stop()
 
 
