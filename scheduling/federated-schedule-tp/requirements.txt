@@ -1,5 +1,0 @@
-sawtooth-sdk==1.2.5
-coredis==4.17.0
-pyzmq==26.1.0
-protobuf==3.20.0
-colorlog==6.8.2

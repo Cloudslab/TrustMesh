@@ -574,8 +574,8 @@ items:"
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
 
-            - name: federated-schedule-tp
-              image: murtazahr/federated-schedule-tp:latest
+            - name: aggregation-request-tp
+              image: murtazahr/aggregation-request-tp:latest
               env:
                 - name: VALIDATOR_URL
                   value: \"tcp://$service_name:4004\"
@@ -603,6 +603,37 @@ items:"
                     secretKeyRef:
                       name: redis-certificates
                       key: ca.crt
+
+            - name: aggregation-confirmation-tp
+              image: murtazahr/aggregation-confirmation-tp:latest
+              env:
+                - name: VALIDATOR_URL
+                  value: \"tcp://$service_name:4004\"
+                - name: REDIS_HOST
+                  value: \"redis-cluster\"
+                - name: REDIS_PORT
+                  value: \"6379\"
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: redis-password
+                      key: password
+                - name: REDIS_SSL_CERT
+                  valueFrom:
+                    secretKeyRef:
+                      name: redis-certificates
+                      key: redis.crt
+                - name: REDIS_SSL_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: redis-certificates
+                      key: redis.key
+                - name: REDIS_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: redis-certificates
+                      key: ca.crt
+
 
             - name: sawtooth-pbft-engine
               image: hyperledger/sawtooth-pbft-engine:chime
@@ -1115,13 +1146,68 @@ echo "$blockchain_network_yaml" > kubernetes-manifests/generated/blockchain-netw
 
 echo "Generated blockchain network deployment YAML has been saved to kubernetes-manifests/generated/blockchain-network-deployment.yaml"
 
-# Part 6: deploy network
+# Part 6: Create MNIST Validation Dataset Distribution Job
+echo "Creating MNIST validation dataset distribution job"
+cat << EOF > kubernetes-manifests/generated/mnist-validation-dataset-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mnist-validation-dataset-distributor
+  labels:
+    job-name: mnist-validation-dataset
+spec:
+  template:
+    metadata:
+      labels:
+        job-name: mnist-validation-dataset
+    spec:
+      containers:
+        - name: validation-dataset-distributor
+          image: murtazahr/validation-dataset-distributor:latest
+          env:
+            - name: REDIS_HOST
+              value: "redis-cluster"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-password
+                  key: password
+            - name: REDIS_SSL_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: redis-certificates
+                  key: redis.crt
+            - name: REDIS_SSL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: redis-certificates
+                  key: redis.key
+            - name: REDIS_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: redis-certificates
+                  key: ca.crt
+      restartPolicy: OnFailure
+  backoffLimit: 3
+EOF
+
+echo "Generated MNIST validation dataset distribution job YAML"
+
+# Part 7: deploy network
 echo "Deploying Network"
 # Apply to kubernetes environment.
 kubectl apply -f kubernetes-manifests/generated/config-and-secrets.yaml
 kubectl apply -f kubernetes-manifests/generated/couchdb-cluster-deployment.yaml
 kubectl apply -f kubernetes-manifests/static/local-docker-registry-deployment.yaml
 kubectl apply -f kubernetes-manifests/generated/blockchain-network-deployment.yaml
+
+# Wait for Redis cluster to be ready, then distribute validation dataset
+echo "Waiting for Redis cluster to be ready before distributing validation dataset..."
+sleep 30
+kubectl apply -f kubernetes-manifests/generated/mnist-validation-dataset-job.yaml
+wait_for_job mnist-validation-dataset
 
 echo "Script execution completed successfully."
 echo ""

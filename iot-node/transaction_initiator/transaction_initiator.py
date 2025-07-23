@@ -21,11 +21,14 @@ STATUS_FAMILY_NAME = 'schedule-status'
 STATUS_FAMILY_VERSION = '1.0'
 IOT_DATA_FAMILY_NAME = 'iot-data'
 IOT_DATA_FAMILY_VERSION = '1.0'
+AGGREGATION_REQUEST_FAMILY_NAME = 'aggregation-request'
+AGGREGATION_REQUEST_FAMILY_VERSION = '1.0'
 IOT_DATA_NAMESPACE = hashlib.sha512(IOT_DATA_FAMILY_NAME.encode()).hexdigest()[:6]
 SCHEDULE_NAMESPACE = hashlib.sha512(SCHEDULE_FAMILY_NAME.encode()).hexdigest()[:6]
 STATUS_NAMESPACE = hashlib.sha512(STATUS_FAMILY_NAME.encode()).hexdigest()[:6]
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:6]
+AGGREGATION_NAMESPACE = hashlib.sha512(AGGREGATION_REQUEST_FAMILY_NAME.encode()).hexdigest()[:6]
 
 PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/client.priv')
 # Get comma-separated list of validator URLs from environment variable
@@ -295,6 +298,97 @@ class TransactionCreator:
         # This is a placeholder - in production this would query the blockchain
         # or Redis for existing federated round information
         return None  # For now, always return None (no existing round found)
+
+    def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=1, metadata=None):
+        """
+        Create and submit aggregation request transaction for federated learning.
+        This is the second phase of federated learning where trained model weights are submitted for aggregation.
+        """
+        try:
+            logger.info(f"Creating aggregation request for node {node_id}, workflow {workflow_id}, round {round_number}")
+            
+            timestamp = int(time.time())
+            
+            aggregation_payload = {
+                "workflow_id": workflow_id,
+                "node_id": node_id,
+                "model_weights": model_weights,
+                "round_number": round_number,
+                "timestamp": timestamp,
+                "metadata": metadata or {}
+            }
+            
+            aggregation_inputs = [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE]
+            aggregation_outputs = [AGGREGATION_NAMESPACE]
+            
+            aggregation_txn = create_transaction(
+                self.signer, 
+                AGGREGATION_REQUEST_FAMILY_NAME, 
+                AGGREGATION_REQUEST_FAMILY_VERSION,
+                aggregation_payload, 
+                aggregation_inputs, 
+                aggregation_outputs
+            )
+            
+            # Create batch and submit
+            batch = create_batch([aggregation_txn], self.signer)
+            result = self.submit_batch(batch)
+            
+            logger.info({
+                "message": "Aggregation request submitted successfully",
+                "result": str(result),
+                "node_id": node_id,
+                "workflow_id": workflow_id,
+                "round_number": round_number
+            })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error creating aggregation request: {str(e)}")
+            raise
+
+    def create_two_phase_federated_transaction(self, training_data, workflow_id, node_id, 
+                                             iot_port, iot_public_key, trained_weights=None, 
+                                             phase="training", round_number=1):
+        """
+        Create transactions for two-phase federated learning flow.
+        Phase 1: Submit training data for local training
+        Phase 2: Submit trained model weights for aggregation
+        """
+        try:
+            if phase == "training":
+                logger.info(f"Phase 1: Submitting training data for node {node_id}")
+                return self.create_federated_learning_transactions(
+                    iot_data=training_data,
+                    workflow_id=workflow_id,
+                    iot_port=iot_port,
+                    iot_public_key=iot_public_key,
+                    node_id=node_id
+                )
+                
+            elif phase == "aggregation":
+                if not trained_weights:
+                    raise ValueError("Trained weights are required for aggregation phase")
+                
+                logger.info(f"Phase 2: Submitting trained weights for aggregation for node {node_id}")
+                return self.create_aggregation_request(
+                    workflow_id=workflow_id,
+                    node_id=node_id,
+                    model_weights=trained_weights,
+                    round_number=round_number,
+                    metadata={
+                        "training_samples": len(training_data.get('x_train', [])) if training_data else 0,
+                        "node_classes": training_data.get('assigned_classes', []) if training_data else [],
+                        "training_timestamp": int(time.time())
+                    }
+                )
+            else:
+                raise ValueError(f"Invalid phase: {phase}. Must be 'training' or 'aggregation'")
+                
+        except Exception as e:
+            logger.error(f"Error in two-phase federated transaction: {str(e)}")
+            raise
 
 
 # This can be imported and used by various data sources

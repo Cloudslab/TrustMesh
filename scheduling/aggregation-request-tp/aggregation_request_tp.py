@@ -1,0 +1,397 @@
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import ssl
+import tempfile
+import time
+import traceback
+
+from sawtooth_sdk.processor.handler import TransactionHandler
+from sawtooth_sdk.processor.exceptions import InvalidTransaction
+from sawtooth_sdk.processor.core import TransactionProcessor
+from coredis import RedisCluster
+from coredis.exceptions import RedisError
+
+# Redis configuration
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
+REDIS_SSL_CERT = os.getenv('REDIS_SSL_CERT')
+REDIS_SSL_KEY = os.getenv('REDIS_SSL_KEY')
+REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
+
+# Sawtooth configuration
+FAMILY_NAME = 'aggregation-request'
+FAMILY_VERSION = '1.0'
+AGGREGATION_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
+WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
+
+# Federated learning configuration
+AGGREGATION_TIMEOUT = int(os.getenv('AGGREGATION_TIMEOUT', '180'))  # 3 minutes default
+MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '3'))
+
+logger = logging.getLogger(__name__)
+
+
+class AggregationRequestTransactionHandler(TransactionHandler):
+    def __init__(self):
+        self.redis = None
+        self.loop = asyncio.get_event_loop()
+        self._initialize_redis()
+
+    @property
+    def family_name(self):
+        return FAMILY_NAME
+
+    @property
+    def family_versions(self):
+        return [FAMILY_VERSION]
+
+    @property
+    def namespaces(self):
+        return [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE]
+
+    def _initialize_redis(self):
+        logger.info("Starting Redis initialization")
+        temp_files = []
+        try:
+            ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
+
+            if REDIS_SSL_CA:
+                ca_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
+                ca_file.write(REDIS_SSL_CA)
+                ca_file.flush()
+                temp_files.append(ca_file.name)
+                ssl_context.load_verify_locations(cafile=ca_file.name)
+            else:
+                logger.warning("REDIS_SSL_CA is empty or not set")
+
+            if REDIS_SSL_CERT and REDIS_SSL_KEY:
+                cert_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
+                key_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.key')
+                cert_file.write(REDIS_SSL_CERT)
+                key_file.write(REDIS_SSL_KEY)
+                cert_file.flush()
+                key_file.flush()
+                temp_files.extend([cert_file.name, key_file.name])
+                ssl_context.load_cert_chain(
+                    certfile=cert_file.name,
+                    keyfile=key_file.name
+                )
+            else:
+                logger.warning("REDIS_SSL_CERT or REDIS_SSL_KEY is empty or not set")
+
+            logger.info(f"Attempting to connect to Redis cluster at {REDIS_HOST}:{REDIS_PORT}")
+            self.redis = RedisCluster(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                ssl=True,
+                ssl_context=ssl_context,
+                decode_responses=True
+            )
+
+            self.loop.run_until_complete(self.redis.ping())
+            logger.info("Connected to Redis cluster successfully")
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+        finally:
+            for file_path in temp_files:
+                try:
+                    os.unlink(file_path)
+                    logger.debug(f"Temporary file deleted: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+
+    def apply(self, transaction, context):
+        logger.info("Entering apply method for aggregation request")
+        try:
+            logger.debug(f"Transaction payload: {transaction.payload}")
+            payload = json.loads(transaction.payload.decode())
+            logger.info(f"Decoded payload: {payload}")
+
+            self._handle_aggregation_request(payload, context)
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {str(e)}")
+            raise InvalidTransaction("Invalid payload: not a valid JSON")
+        except KeyError as e:
+            logger.error(f"Missing key in payload: {str(e)}")
+            raise InvalidTransaction(f"Invalid payload: missing {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error in apply method: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise InvalidTransaction(str(e))
+
+    def _handle_aggregation_request(self, payload, context):
+        logger.info("Entering _handle_aggregation_request method")
+        
+        workflow_id = payload['workflow_id']
+        node_id = payload['node_id']
+        model_weights = payload['model_weights']
+        round_number = payload.get('round_number', 1)
+        
+        logger.info(f"Aggregation request - Workflow: {workflow_id}, Node: {node_id}, Round: {round_number}")
+
+        # Validate workflow exists and is federated
+        if not self._validate_federated_workflow(context, workflow_id):
+            logger.error(f"Invalid or non-federated workflow ID: {workflow_id}")
+            raise InvalidTransaction(f"Invalid or non-federated workflow ID: {workflow_id}")
+
+        # Check for existing aggregation round
+        existing_round = self._get_existing_aggregation_round(context, workflow_id, round_number)
+        
+        if existing_round:
+            # Join existing aggregation round
+            aggregation_id = existing_round['aggregation_id']
+            aggregator_node = existing_round['aggregator_node']
+            logger.info(f"Joining existing aggregation round {aggregation_id} with aggregator {aggregator_node}")
+            
+            # Add this node's contribution to the round
+            self._add_node_to_aggregation_round(context, aggregation_id, node_id, model_weights, payload)
+            
+        else:
+            # Create new aggregation round - use consensus to elect aggregator
+            aggregator_node = self.loop.run_until_complete(self._select_aggregator())
+            aggregation_id = f"{workflow_id}_agg_{round_number}_{int(time.time())}"
+            
+            logger.info(f"Creating new aggregation round {aggregation_id} with aggregator {aggregator_node}")
+            
+            # Create aggregation round record
+            self._create_aggregation_round(context, workflow_id, aggregation_id, aggregator_node, 
+                                         round_number, node_id, model_weights, payload)
+
+        # Emit aggregation request event
+        context.add_event(
+            event_type="aggregation-request",
+            attributes=[
+                ("workflow_id", workflow_id),
+                ("aggregation_id", aggregation_id),
+                ("node_id", node_id),
+                ("round_number", str(round_number)),
+                ("aggregator_node", aggregator_node),
+                ("timestamp", str(int(time.time())))
+            ]
+        )
+        
+        logger.info(f"Aggregation request processed for node {node_id} in round {round_number}")
+
+    def _validate_federated_workflow(self, context, workflow_id):
+        """Validate that the workflow exists and is configured for federated learning"""
+        try:
+            address = self._make_workflow_address(workflow_id)
+            state_entries = context.get_state([address])
+            if state_entries:
+                workflow_data = json.loads(state_entries[0].data.decode())
+                dependency_graph = workflow_data.get('dependency_graph', {})
+                workflow_type = dependency_graph.get('workflow_type', 'standard')
+                federated_config = dependency_graph.get('federated_config', {})
+                
+                is_federated = workflow_type == 'federated_learning' or bool(federated_config)
+                logger.info(f"Workflow {workflow_id} is federated: {is_federated}")
+                return is_federated
+            return False
+        except Exception as e:
+            logger.error(f"Error validating federated workflow: {e}")
+            return False
+
+    def _get_existing_aggregation_round(self, context, workflow_id, round_number):
+        """Check if an aggregation round already exists for this workflow and round"""
+        try:
+            # Search for existing aggregation rounds for this workflow and round
+            address_prefix = self._make_aggregation_address_prefix(workflow_id, round_number)
+            state_entries = context.get_state([address_prefix])
+            
+            for entry in state_entries:
+                try:
+                    round_data = json.loads(entry.data.decode())
+                    if (round_data.get('workflow_id') == workflow_id and 
+                        round_data.get('round_number') == round_number and
+                        round_data.get('status') == 'collecting'):
+                        
+                        logger.info(f"Found existing aggregation round: {round_data['aggregation_id']}")
+                        return round_data
+                except Exception as e:
+                    logger.warning(f"Error parsing aggregation round data: {e}")
+                    continue
+            
+            return None
+        except Exception as e:
+            logger.error(f"Error checking for existing aggregation round: {e}")
+            return None
+
+    def _create_aggregation_round(self, context, workflow_id, aggregation_id, aggregator_node, 
+                                 round_number, initial_node_id, initial_weights, initial_payload):
+        """Create a new aggregation round"""
+        try:
+            address = self._make_aggregation_address(aggregation_id)
+            
+            round_data = {
+                'aggregation_id': aggregation_id,
+                'workflow_id': workflow_id,
+                'round_number': round_number,
+                'aggregator_node': aggregator_node,
+                'status': 'collecting',
+                'created_time': time.time(),
+                'collection_deadline': time.time() + AGGREGATION_TIMEOUT,
+                'participating_nodes': [initial_node_id],
+                'node_contributions': {
+                    initial_node_id: {
+                        'model_weights': initial_weights,
+                        'timestamp': time.time(),
+                        'metadata': initial_payload.get('metadata', {})
+                    }
+                },
+                'min_nodes_required': MIN_NODES_FOR_AGGREGATION,
+                'expected_nodes': self._get_expected_nodes_for_workflow(workflow_id)
+            }
+            
+            context.set_state({
+                address: json.dumps(round_data).encode()
+            })
+            
+            logger.info(f"Created aggregation round {aggregation_id} for workflow {workflow_id}")
+            
+        except Exception as e:
+            logger.error(f"Error creating aggregation round: {e}")
+            raise InvalidTransaction(f"Failed to create aggregation round: {e}")
+
+    def _add_node_to_aggregation_round(self, context, aggregation_id, node_id, model_weights, payload):
+        """Add a node's contribution to an existing aggregation round"""
+        try:
+            address = self._make_aggregation_address(aggregation_id)
+            state_entries = context.get_state([address])
+            
+            if not state_entries:
+                raise InvalidTransaction(f"Aggregation round {aggregation_id} not found")
+            
+            round_data = json.loads(state_entries[0].data.decode())
+            
+            # Check if node already contributed
+            if node_id in round_data['participating_nodes']:
+                logger.warning(f"Node {node_id} already contributed to round {aggregation_id}")
+                return
+            
+            # Check if round is still collecting
+            if round_data['status'] != 'collecting':
+                raise InvalidTransaction(f"Aggregation round {aggregation_id} is no longer collecting contributions")
+            
+            # Add node contribution
+            round_data['participating_nodes'].append(node_id)
+            round_data['node_contributions'][node_id] = {
+                'model_weights': model_weights,
+                'timestamp': time.time(),
+                'metadata': payload.get('metadata', {})
+            }
+            
+            # Update state
+            context.set_state({
+                address: json.dumps(round_data).encode()
+            })
+            
+            logger.info(f"Added node {node_id} to aggregation round {aggregation_id}")
+            logger.info(f"Round now has {len(round_data['participating_nodes'])} participating nodes")
+            
+        except Exception as e:
+            logger.error(f"Error adding node to aggregation round: {e}")
+            raise InvalidTransaction(f"Failed to add node to aggregation round: {e}")
+
+    def _get_expected_nodes_for_workflow(self, workflow_id):
+        """Get expected nodes for federated workflow"""
+        # For MNIST federated learning, we expect 5 IoT nodes
+        return [f"iot-{i}" for i in range(5)]
+
+    async def _select_aggregator(self):
+        """Select aggregator node using deterministic algorithm with consensus"""
+        logger.info("Entering _select_aggregator method")
+        try:
+            if self.redis is None:
+                logger.error("Redis connection not initialized")
+                raise InvalidTransaction("Redis connection not initialized")
+
+            node_resources = []
+            logger.info("Scanning Redis for resource data")
+            async for key in self.redis.scan_iter(match='resources_*'):
+                node_id = key.split('_', 1)[1]
+                logger.debug(f"Fetching data for node: {node_id}")
+                redis_data = await self.redis.get(key)
+                if redis_data:
+                    resource_data = json.loads(redis_data)
+                    logger.debug(f"Resource data for node {node_id}: {resource_data}")
+                    node_resources.append({
+                        'id': node_id,
+                        'resources': resource_data
+                    })
+
+            if not node_resources:
+                logger.error("No resource data available")
+                raise InvalidTransaction("No resource data available")
+
+            logger.info("Selecting node with most available resources as aggregator")
+            selected_node = max(node_resources, key=lambda x: self._calculate_available_resources(x['resources']))
+            logger.info(f"Selected aggregator node: {selected_node['id']}")
+            return selected_node['id']
+        except RedisError as e:
+            logger.error(f"Error accessing Redis: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise InvalidTransaction("Failed to access node resource data")
+        except Exception as e:
+            logger.error(f"Unexpected error in _select_aggregator: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise InvalidTransaction(f"Error selecting aggregator: {str(e)}")
+
+    @staticmethod
+    def _calculate_available_resources(resources):
+        """Calculate available resources for node selection"""
+        cpu_available = resources['cpu']['total'] * (1 - resources['cpu']['used_percent'] / 100)
+        memory_available = resources['memory']['total'] * (1 - resources['memory']['used_percent'] / 100)
+        return cpu_available + memory_available
+
+    @staticmethod
+    def _make_aggregation_address(aggregation_id):
+        """Generate blockchain address for aggregation round"""
+        return AGGREGATION_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
+
+    @staticmethod
+    def _make_aggregation_address_prefix(workflow_id, round_number):
+        """Generate address prefix for searching aggregation rounds"""
+        prefix_key = f"{workflow_id}_agg_{round_number}"
+        return AGGREGATION_NAMESPACE + hashlib.sha512(prefix_key.encode()).hexdigest()[:64]
+
+    @staticmethod
+    def _make_workflow_address(workflow_id):
+        """Generate blockchain address for workflow data"""
+        return WORKFLOW_NAMESPACE + hashlib.sha512(workflow_id.encode()).hexdigest()[:64]
+
+
+def main():
+    logger.info("Starting Aggregation Request Transaction Processor")
+    processor = TransactionProcessor(url=os.getenv('VALIDATOR_URL', 'tcp://validator:4004'))
+    handler = AggregationRequestTransactionHandler()
+    processor.add_handler(handler)
+    try:
+        logger.info("Starting processor")
+        processor.start()
+    except KeyboardInterrupt:
+        logger.info("Stopping processor")
+        pass
+    except Exception as e:
+        logger.error(f"Processor error: {str(e)}")
+        logger.error(traceback.format_exc())
+    finally:
+        logger.info("Stopping processor")
+        processor.stop()
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    main()

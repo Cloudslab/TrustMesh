@@ -6,6 +6,7 @@ Each node maintains its own MNIST data partition and contributes to global model
 """
 
 import argparse
+import asyncio
 import logging
 import time
 import numpy as np
@@ -47,24 +48,27 @@ class MNISTFederatedNode:
     in federated learning rounds while preserving data privacy.
     """
     
-    def __init__(self, node_id: str, device_manager: IoTDeviceManager):
+    def __init__(self, node_id: str, device_manager: IoTDeviceManager, test_split: float = 0.2):
         self.node_id = node_id
         self.device_manager = device_manager
         self.node_index = self._extract_node_index(node_id)
         self.assigned_classes = self._get_assigned_classes()
+        self.test_split = test_split
         self.data_partition = None
+        self.local_model = None  # For local validation
         
         # Validate node configuration
         if self.node_index >= TOTAL_NODES:
             raise ValueError(f"Node index {self.node_index} exceeds total nodes {TOTAL_NODES}")
         
-        # Load MNIST data partition
+        # Load MNIST data partition with train/test split
         self._load_data_partition()
         
         logger.info(f"Initialized MNIST Federated Node {node_id}")
         logger.info(f"Node index: {self.node_index}")
         logger.info(f"Assigned digit classes: {self.assigned_classes}")
         logger.info(f"Training samples: {len(self.data_partition['x_train'])}")
+        logger.info(f"Local test samples: {len(self.data_partition['x_test'])}")
     
     def _extract_node_index(self, node_id: str) -> int:
         """Extract 0-based node index from node ID"""
@@ -90,14 +94,26 @@ class MNISTFederatedNode:
             # Create deterministic partition
             x_partition, y_partition = self._create_node_partition(x_train, y_train)
             
-            # Store partition
+            # Split into train and local test sets
+            split_idx = int(len(x_partition) * (1 - self.test_split))
+            
+            x_train_local = x_partition[:split_idx]
+            y_train_local = y_partition[:split_idx]
+            x_test_local = x_partition[split_idx:]
+            y_test_local = y_partition[split_idx:]
+            
+            # Store partition with train/test split
             self.data_partition = {
-                'x_train': x_partition.tolist(),
-                'y_train': y_partition.tolist(),
+                'x_train': x_train_local.tolist(),
+                'y_train': y_train_local.tolist(),
+                'x_test': x_test_local.tolist(),
+                'y_test': y_test_local.tolist(),
                 'node_index': self.node_index,
                 'assigned_classes': self.assigned_classes,
-                'total_samples': len(x_partition),
-                'class_distribution': self._calculate_class_distribution(y_partition)
+                'train_samples': len(x_train_local),
+                'test_samples': len(x_test_local),
+                'train_distribution': self._calculate_class_distribution(y_train_local),
+                'test_distribution': self._calculate_class_distribution(y_test_local)
             }
             
             logger.info(f"Created partition with {len(x_partition)} samples")
@@ -146,64 +162,176 @@ class MNISTFederatedNode:
         """Get list of expected node IDs"""
         return [f"iot-{i}" for i in range(TOTAL_NODES)]
     
-    def submit_federated_round(self, workflow_id: str, round_number: int) -> Optional[str]:
-        """Submit data for a federated learning round"""
+    def submit_training_phase(self, workflow_id: str, round_number: int) -> Optional[str]:
+        """Submit data for the training phase of federated learning"""
         try:
             logger.info(f"\n{'='*60}")
-            logger.info(f"Node {self.node_id}: Submitting Round {round_number}")
+            logger.info(f"Node {self.node_id}: Training Phase - Round {round_number}")
             logger.info(f"{'='*60}")
             
-            # Prepare data payload
-            data_payload = {
+            # Prepare training data payload (subset for this round)
+            samples_per_round = min(500, len(self.data_partition['x_train']) // 2)  # Use subset
+            start_idx = (round_number - 1) * samples_per_round % len(self.data_partition['x_train'])
+            end_idx = min(start_idx + samples_per_round, len(self.data_partition['x_train']))
+            
+            round_x_data = self.data_partition['x_train'][start_idx:end_idx]
+            round_y_data = self.data_partition['y_train'][start_idx:end_idx]
+            
+            training_data = {
                 'node_id': self.node_id,
                 'node_index': self.node_index,
                 'round_number': round_number,
-                'data_partition': self.data_partition,
+                'x_train': round_x_data,
+                'y_train': round_y_data,
+                'assigned_classes': self.assigned_classes,
+                'samples_count': len(round_x_data),
                 'timestamp': datetime.now().isoformat(),
-                'node_metadata': {
-                    'assigned_classes': self.assigned_classes,
-                    'total_samples': self.data_partition['total_samples'],
-                    'class_distribution': self.data_partition['class_distribution']
+                'training_metadata': {
+                    'start_idx': start_idx,
+                    'end_idx': end_idx,
+                    'total_node_samples': self.data_partition['train_samples'],
+                    'class_distribution': self.data_partition['train_distribution']
                 }
             }
             
+            logger.info(f"Training on {len(round_x_data)} samples from classes {self.assigned_classes}")
+            
             if FEDERATED_AVAILABLE:
-                logger.info(f"Submitting federated data for node {self.node_id} (consensus-integrated)")
+                logger.info(f"Submitting training data for node {self.node_id}")
                 
-                # Submit using consensus-integrated federated transaction creator
-                schedule_id = transaction_creator.create_federated_learning_transactions(
-                    iot_data=data_payload,
+                # Phase 1: Submit training data
+                schedule_id = transaction_creator.create_two_phase_federated_transaction(
+                    training_data=training_data,
                     workflow_id=workflow_id,
-                    iot_port="5000",  # Default IoT port
-                    iot_public_key="dummy_public_key",  # Will be replaced with actual key
-                    node_id=self.node_id
+                    node_id=self.node_id,
+                    iot_port="5000",
+                    iot_public_key="dummy_public_key",
+                    phase="training",
+                    round_number=round_number
                 )
                 
             else:
-                # Fallback to standard transaction creator (non-federated)
-                logger.warning("Using standard transaction creator - this will create separate workflows per node")
+                logger.warning("Using standard transaction creator - federated learning disabled")
                 schedule_id = transaction_creator.create_and_send_transactions(
-                    iot_data=data_payload,
+                    iot_data=training_data,
                     workflow_id=workflow_id,
                     iot_port="5000",
                     iot_public_key="dummy_public_key"
                 )
             
-            logger.info(f"✓ Successfully submitted round {round_number}")
+            logger.info(f"✓ Successfully submitted training phase for round {round_number}")
             logger.info(f"  Schedule ID: {schedule_id}")
-            logger.info(f"  Samples contributed: {self.data_partition['total_samples']}")
+            logger.info(f"  Training samples: {len(round_x_data)}")
             logger.info(f"  Classes: {self.assigned_classes}")
             
             return schedule_id
             
         except Exception as e:
-            logger.error(f"✗ Failed to submit round {round_number}: {e}")
+            logger.error(f"✗ Failed to submit training phase for round {round_number}: {e}")
             return None
+
+    def evaluate_model_locally(self, model_weights: Dict) -> float:
+        """Evaluate model on local test data"""
+        try:
+            # Create model architecture (must match training task)
+            model = tf.keras.Sequential([
+                tf.keras.layers.Reshape((28, 28, 1), input_shape=(28, 28)),
+                tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
+                tf.keras.layers.MaxPooling2D((2, 2)),
+                tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+                tf.keras.layers.MaxPooling2D((2, 2)),
+                tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+                tf.keras.layers.Flatten(),
+                tf.keras.layers.Dense(64, activation='relu'),
+                tf.keras.layers.Dense(10, activation='softmax')
+            ])
+            
+            model.compile(
+                optimizer='adam',
+                loss='sparse_categorical_crossentropy',
+                metrics=['accuracy']
+            )
+            
+            # Load weights
+            weight_arrays = []
+            for layer_name in sorted(model_weights.keys()):
+                weight_arrays.append(np.array(model_weights[layer_name]))
+            
+            model.set_weights(weight_arrays)
+            
+            # Prepare test data
+            x_test = np.array(self.data_partition['x_test']).astype('float32') / 255.0
+            y_test = np.array(self.data_partition['y_test'])
+            
+            # Reshape if needed
+            if len(x_test.shape) == 3:
+                x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
+            
+            # Evaluate on local test set
+            loss, accuracy = model.evaluate(x_test, y_test, verbose=0)
+            
+            logger.info(f"Local validation - Accuracy: {accuracy:.4f}, Loss: {loss:.4f} on {len(x_test)} samples")
+            
+            # Store for tracking
+            self.local_model = model
+            
+            return accuracy
+            
+        except Exception as e:
+            logger.error(f"Error in local model evaluation: {e}")
+            return 0.0
+
+    def submit_aggregation_phase(self, workflow_id: str, round_number: int, trained_weights: Dict) -> bool:
+        """Submit trained model weights for the aggregation phase"""
+        try:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Node {self.node_id}: Aggregation Phase - Round {round_number}")
+            logger.info(f"{'='*60}")
+            
+            if not trained_weights:
+                logger.error("No trained weights available for aggregation")
+                return False
+            
+            # Prepare training data for metadata (needed for aggregation context)
+            training_data = {
+                'assigned_classes': self.assigned_classes,
+                'x_train': [],  # Empty for aggregation phase
+                'total_samples': self.data_partition['total_samples']
+            }
+            
+            logger.info(f"Submitting trained weights from {len(trained_weights)} layers")
+            
+            if FEDERATED_AVAILABLE:
+                # Phase 2: Submit trained weights for aggregation
+                result = transaction_creator.create_two_phase_federated_transaction(
+                    training_data=training_data,
+                    workflow_id=workflow_id,
+                    node_id=self.node_id,
+                    iot_port="5000",
+                    iot_public_key="dummy_public_key",
+                    trained_weights=trained_weights,
+                    phase="aggregation",
+                    round_number=round_number
+                )
+                
+                logger.info(f"✓ Successfully submitted aggregation request for round {round_number}")
+                logger.info(f"  Node: {self.node_id}")
+                logger.info(f"  Weight layers: {list(trained_weights.keys())}")
+                
+                return True
+                
+            else:
+                logger.warning("Federated learning not available - skipping aggregation phase")
+                return False
+                
+        except Exception as e:
+            logger.error(f"✗ Failed to submit aggregation phase for round {round_number}: {e}")
+            return False
     
-    def run_federated_learning(self, workflow_id: str, max_rounds: int = 5):
-        """Run federated learning for specified rounds"""
+    async def run_federated_learning(self, workflow_id: str, max_rounds: int = 5):
+        """Run two-phase federated learning for specified rounds"""
         logger.info(f"\n{'#'*60}")
-        logger.info(f"# Starting MNIST Federated Learning")
+        logger.info(f"# Starting Two-Phase MNIST Federated Learning")
         logger.info(f"# Node: {self.node_id}")
         logger.info(f"# Workflow: {workflow_id}")
         logger.info(f"# Max Rounds: {max_rounds}")
@@ -211,32 +339,148 @@ class MNISTFederatedNode:
         logger.info(f"{'#'*60}\n")
         
         try:
+            # Initialize federated response manager for receiving aggregated models
+            from response_manager.federated_response_manager import FederatedResponseManager
+            fed_response_manager = FederatedResponseManager(self.node_id)
+            
+            # Start response manager in background
+            import asyncio
+            import threading
+            
+            def start_response_manager():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(fed_response_manager.start_federated_response_handler())
+            
+            response_thread = threading.Thread(target=start_response_manager, daemon=True)
+            response_thread.start()
+            logger.info("Started federated response manager")
+            
             for round_num in range(1, max_rounds + 1):
-                # Submit round
-                schedule_id = self.submit_federated_round(workflow_id, round_num)
+                logger.info(f"\n🔄 Starting Round {round_num}/{max_rounds}")
                 
-                if not schedule_id:
-                    logger.error(f"Failed to submit round {round_num}, aborting...")
+                # Check convergence before continuing
+                if not fed_response_manager.should_continue_learning(workflow_id):
+                    logger.info(f"🛑 Convergence detected - stopping at round {round_num}")
                     break
                 
-                # Wait between rounds (except last)
-                if round_num < max_rounds:
-                    wait_time = FEDERATED_ROUND_INTERVAL
-                    logger.info(f"⏳ Waiting {wait_time}s for round {round_num} to complete...")
+                # Phase 1: Submit training data and wait for training completion
+                logger.info(f"📊 Phase 1: Training Phase")
+                schedule_id = self.submit_training_phase(workflow_id, round_num)
+                
+                if not schedule_id:
+                    logger.error(f"Failed to submit training phase for round {round_num}, aborting...")
+                    break
+                
+                # Wait for training to complete and get trained weights
+                logger.info(f"⏳ Waiting for training completion...")
+                trained_weights = await self._wait_for_training_completion(
+                    fed_response_manager, workflow_id, schedule_id, timeout=120  # 2 minutes timeout
+                )
+                
+                if not trained_weights:
+                    logger.error(f"Training failed or timed out for round {round_num}")
+                    continue
+                
+                # Phase 2: Submit trained weights for aggregation
+                logger.info(f"🔗 Phase 2: Aggregation Phase")
+                aggregation_success = self.submit_aggregation_phase(workflow_id, round_num, trained_weights)
+                
+                if not aggregation_success:
+                    logger.error(f"Failed to submit aggregation phase for round {round_num}")
+                    continue
+                
+                # Wait for aggregated model
+                logger.info(f"⏳ Waiting for aggregated model from round {round_num}...")
+                aggregated_weights = await self._wait_for_aggregated_model(fed_response_manager, workflow_id, round_num, timeout=180)
+                
+                if aggregated_weights:
+                    # Perform local validation on test data
+                    logger.info(f"📊 Performing local validation on test set...")
+                    local_accuracy = self.evaluate_model_locally(aggregated_weights)
                     
-                    # Show progress
-                    for i in range(0, wait_time, 30):
-                        remaining = wait_time - i
-                        logger.info(f"   {remaining}s remaining...")
-                        time.sleep(min(30, remaining))
+                    # Update convergence tracker with local accuracy
+                    fed_response_manager.update_local_validation_accuracy(workflow_id, round_num, local_accuracy)
+                    
+                    # Check if should continue based on local validation
+                    if not fed_response_manager.should_continue_learning(workflow_id):
+                        logger.info(f"🛑 Convergence detected after round {round_num} based on local validation - stopping")
+                        break
+                
+                # Brief pause between rounds
+                if round_num < max_rounds:
+                    logger.info(f"⏳ Round {round_num} complete, preparing for next round...")
+                    time.sleep(10)
             
-            logger.info(f"\n✅ Completed {max_rounds} federated learning rounds")
+            logger.info(f"\n✅ Completed federated learning with {max_rounds} rounds")
+            
+            # Show convergence status
+            convergence_status = fed_response_manager.get_convergence_status(workflow_id)
+            logger.info(f"📈 Final Convergence Status: {convergence_status}")
+            
+            # Show round history
+            round_history = fed_response_manager.get_round_history()
+            logger.info(f"📋 Participated in {len(round_history)} aggregation rounds")
             
         except KeyboardInterrupt:
             logger.info(f"\n⏹️ Federated learning interrupted by user")
         except Exception as e:
             logger.error(f"\n❌ Error in federated learning: {e}")
             raise
+        finally:
+            # Cleanup
+            try:
+                await fed_response_manager.shutdown()
+            except:
+                pass
+
+    async def _wait_for_training_completion(self, fed_response_manager, workflow_id: str, 
+                                          schedule_id: str, timeout: int = 120) -> Optional[Dict]:
+        """Wait for training to complete and return trained weights"""
+        import asyncio
+        
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            # Check if trained weights are available
+            weights_data = await fed_response_manager.get_trained_weights_for_aggregation(workflow_id, schedule_id)
+            
+            if weights_data and 'trained_weights' in weights_data:
+                logger.info(f"✓ Training completed for schedule {schedule_id}")
+                return weights_data['trained_weights']
+            
+            # Wait and check again
+            await asyncio.sleep(5.0)
+        
+        logger.error(f"Training timeout for schedule {schedule_id}")
+        return None
+
+    async def _wait_for_aggregated_model(self, fed_response_manager, workflow_id: str, 
+                                       round_number: int, timeout: int = 180) -> Optional[Dict]:
+        """Wait for aggregated model to be received and return weights"""
+        import asyncio
+        
+        start_time = time.time()
+        model_key = f"{workflow_id}_round_{round_number}"
+        
+        while time.time() - start_time < timeout:
+            # Check if aggregated model is available
+            if model_key in fed_response_manager.aggregated_models:
+                logger.info(f"✓ Received aggregated model for round {round_number}")
+                
+                # Log model details
+                model_data = fed_response_manager.aggregated_models[model_key]
+                logger.info(f"  Participating nodes: {model_data['participating_nodes']}")
+                logger.info(f"  Aggregator: {model_data['aggregator_node']}")
+                
+                # Return aggregated weights for local validation
+                return model_data.get('aggregated_weights', {})
+            
+            # Wait and check again
+            await asyncio.sleep(5.0)
+        
+        logger.warning(f"Aggregated model timeout for round {round_number}")
+        return None
 
 
 def auto_detect_node_id() -> Optional[str]:
@@ -326,10 +570,10 @@ def main():
         )
         
         # Run federated learning
-        fl_node.run_federated_learning(
+        asyncio.run(fl_node.run_federated_learning(
             workflow_id=args.workflow_id,
             max_rounds=args.max_rounds
-        )
+        ))
         
     except Exception as e:
         logger.error(f"Failed to run federated learning: {e}")

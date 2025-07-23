@@ -1,5 +1,7 @@
 {
-    "memory": 2147483648,
-    "cpu": 1.0,
-    "disk": 1073741824
+  "federated-training-task": {
+    "memory": 4294967296,
+    "cpu": 2.0,
+    "disk": 2147483648
+  }
 }

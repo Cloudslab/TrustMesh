@@ -8,57 +8,20 @@
     "max_rounds": 5,
     "round_timeout": 300
   },
-  "start": "fl-local-training-app-id",
+  "start": "federated-training-task",
   "nodes": {
-    "fl-local-training-app-id": {
-      "type": "federated_parallel",
-      "description": "Local model training on each node's MNIST partition",
-      "execution_mode": "multi_node_parallel",
-      "min_nodes_required": 3,
-      "next": ["fl-aggregate-models-app-id"]
-    },
-    "fl-aggregate-models-app-id": {
-      "type": "federated_coordinator_task",
-      "description": "FedAvg model aggregation using consensus-elected coordinator",
-      "execution_mode": "coordinator_only",
-      "requires_all_previous": true,
-      "next": ["fl-model-evaluation-app-id"]
-    },
-    "fl-model-evaluation-app-id": {
-      "type": "federated_evaluation",
-      "description": "Global model evaluation and metrics reporting",
-      "execution_mode": "coordinator_only",
-      "requires_all_previous": true,
+    "federated-training-task": {
+      "type": "federated_training",
+      "description": "Local model training on MNIST partition and return trained weights",
+      "execution_mode": "standard",
       "next": []
     }
   },
   "level_info": {
     "0": [
       {
-        "app_id": "fl-local-training-app-id",
+        "app_id": "federated-training-task",
         "dependencies": [],
-        "resource_requirements": {
-          "cpu": 2,
-          "memory": 4096,
-          "gpu": false
-        }
-      }
-    ],
-    "1": [
-      {
-        "app_id": "fl-aggregate-models-app-id",
-        "dependencies": ["fl-local-training-app-id"],
-        "resource_requirements": {
-          "cpu": 4,
-          "memory": 8192,
-          "gpu": false
-        }
-      }
-    ],
-    "2": [
-      {
-        "app_id": "fl-model-evaluation-app-id",
-        "dependencies": ["fl-aggregate-models-app-id"],
         "resource_requirements": {
           "cpu": 2,
           "memory": 4096,
@@ -68,13 +31,14 @@
     ]
   },
   "metadata": {
-    "description": "MNIST Federated Learning with Consensus-Integrated Coordination",
+    "description": "MNIST Federated Learning with Two-Phase Architecture",
     "author": "TrustMesh Framework",
-    "version": "2.0",
+    "version": "3.0",
     "privacy_preserving": true,
     "consensus_integrated": true,
     "created_date": "2024-01-01",
     "supported_models": ["CNN", "DNN"],
-    "supported_datasets": ["MNIST"]
+    "supported_datasets": ["MNIST"],
+    "architecture": "two_phase"
   }
 }

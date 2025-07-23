@@ -1,8 +1,14 @@
 {
-  "start": "local-training-app-id",
+  "workflow_type": "federated_learning",
+  "start": "federated-training-task",
   "nodes": {
-    "local-training-app-id": {"next": ["aggregate-models-app-id"]},
-    "aggregate-models-app-id": {"next": ["model-evaluation-app-id"]},
-    "model-evaluation-app-id": {"next": []}
+    "federated-training-task": {"next": []}
+  },
+  "federated_config": {
+    "aggregation_strategy": "fedavg",
+    "expected_nodes": ["iot-0", "iot-1", "iot-2", "iot-3", "iot-4"],
+    "min_nodes_required": 3,
+    "max_rounds": 5,
+    "aggregation_timeout": 180
   }
 }

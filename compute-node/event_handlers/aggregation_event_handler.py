@@ -1,0 +1,618 @@
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import ssl
+import tempfile
+import time
+import traceback
+import numpy as np
+import zmq
+import zmq.asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Any
+
+from sawtooth_sdk.messaging.stream import Stream
+from sawtooth_sdk.protobuf.client_state_pb2 import ClientStateGetRequest, ClientStateGetResponse
+from sawtooth_sdk.protobuf.events_pb2 import EventSubscription, EventList
+from sawtooth_sdk.protobuf.client_event_pb2 import ClientEventsSubscribeRequest, ClientEventsSubscribeResponse
+from sawtooth_sdk.protobuf.validator_pb2 import Message
+from sawtooth_sdk.protobuf.transaction_pb2 import TransactionHeader, Transaction
+from sawtooth_sdk.protobuf.batch_pb2 import BatchHeader, Batch, BatchList
+from sawtooth_sdk.protobuf.client_batch_submit_pb2 import ClientBatchSubmitResponse
+from sawtooth_signing import create_context, CryptoFactory, secp256k1
+from coredis import RedisCluster
+
+# Family configurations
+AGGREGATION_REQUEST_FAMILY_NAME = 'aggregation-request'
+AGGREGATION_CONFIRMATION_FAMILY_NAME = 'aggregation-confirmation'
+AGGREGATION_REQUEST_NAMESPACE = hashlib.sha512(AGGREGATION_REQUEST_FAMILY_NAME.encode()).hexdigest()[:6]
+AGGREGATION_CONFIRMATION_NAMESPACE = hashlib.sha512(AGGREGATION_CONFIRMATION_FAMILY_NAME.encode()).hexdigest()[:6]
+
+# Redis configuration
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
+REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
+REDIS_SSL_CERT = os.getenv('REDIS_SSL_CERT')
+REDIS_SSL_KEY = os.getenv('REDIS_SSL_KEY')
+REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
+
+PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/root.priv')
+
+# Aggregation configuration
+AGGREGATION_TIMEOUT = int(os.getenv('AGGREGATION_TIMEOUT', '180'))  # 3 minutes
+MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '3'))
+
+logger = logging.getLogger(__name__)
+
+
+def load_private_key():
+    try:
+        with open(PRIVATE_KEY_FILE, 'r') as key_reader:
+            private_key_str = key_reader.read().strip()
+            return secp256k1.Secp256k1PrivateKey.from_hex(private_key_str)
+    except IOError as e:
+        raise IOError(f"Failed to load private key from {PRIVATE_KEY_FILE}: {str(e)}") from e
+
+
+def initialize_redis():
+    logger.info("Starting Redis initialization for aggregation handler")
+    temp_files = []
+    try:
+        ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
+
+        if REDIS_SSL_CA:
+            ca_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
+            ca_file.write(REDIS_SSL_CA)
+            ca_file.flush()
+            temp_files.append(ca_file.name)
+            ssl_context.load_verify_locations(cafile=ca_file.name)
+
+        if REDIS_SSL_CERT and REDIS_SSL_KEY:
+            cert_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
+            key_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.key')
+            cert_file.write(REDIS_SSL_CERT)
+            key_file.write(REDIS_SSL_KEY)
+            cert_file.flush()
+            key_file.flush()
+            temp_files.extend([cert_file.name, key_file.name])
+            ssl_context.load_cert_chain(
+                certfile=cert_file.name,
+                keyfile=key_file.name
+            )
+
+        logger.info(f"Attempting to connect to Redis cluster at {REDIS_HOST}:{REDIS_PORT}")
+
+        redis_instance = RedisCluster(
+            host=REDIS_HOST,
+            port=REDIS_PORT,
+            password=REDIS_PASSWORD,
+            ssl=True,
+            ssl_context=ssl_context,
+            decode_responses=True
+        )
+
+        asyncio.get_event_loop().run_until_complete(redis_instance.ping())
+        logger.info("Connected to Redis cluster successfully")
+
+        return redis_instance
+
+    except Exception as e:
+        logger.error(f"Failed to connect to Redis: {str(e)}")
+        raise
+    finally:
+        for file_path in temp_files:
+            try:
+                os.unlink(file_path)
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+
+
+class FederatedAggregator:
+    """Handles federated learning aggregation using FedAvg algorithm"""
+    
+    def __init__(self, node_id: str, redis_client):
+        self.node_id = node_id
+        self.redis = redis_client
+        self.pending_aggregations = {}
+        
+        logger.info(f"Initialized FederatedAggregator for node {node_id}")
+
+    async def start_aggregation_collection(self, aggregation_id: str, workflow_id: str, 
+                                         round_number: int, expected_nodes: List[str]):
+        """Start collecting model weights from participating nodes"""
+        try:
+            logger.info(f"Starting aggregation collection for {aggregation_id}")
+            
+            # Store aggregation metadata
+            self.pending_aggregations[aggregation_id] = {
+                'workflow_id': workflow_id,
+                'round_number': round_number,
+                'expected_nodes': expected_nodes,
+                'collected_weights': {},
+                'start_time': time.time(),
+                'deadline': time.time() + AGGREGATION_TIMEOUT
+            }
+            
+            # Wait for collection period or until minimum nodes reached
+            await self._wait_for_collection_completion(aggregation_id)
+            
+        except Exception as e:
+            logger.error(f"Error in aggregation collection: {e}")
+            raise
+
+    async def _wait_for_collection_completion(self, aggregation_id: str):
+        """Wait for aggregation collection to complete"""
+        aggregation_info = self.pending_aggregations[aggregation_id]
+        
+        while time.time() < aggregation_info['deadline']:
+            # Check if we have enough contributions
+            collected_count = len(aggregation_info['collected_weights'])
+            
+            if collected_count >= MIN_NODES_FOR_AGGREGATION:
+                logger.info(f"Minimum nodes reached ({collected_count}), starting aggregation")
+                await self._perform_aggregation(aggregation_id)
+                return
+            
+            # Wait and check again
+            await asyncio.sleep(5.0)
+        
+        # Timeout reached
+        collected_count = len(aggregation_info['collected_weights'])
+        if collected_count >= MIN_NODES_FOR_AGGREGATION:
+            logger.info(f"Timeout reached, but have {collected_count} nodes, proceeding with aggregation")
+            await self._perform_aggregation(aggregation_id)
+        else:
+            logger.error(f"Aggregation timeout with insufficient nodes: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
+            await self._handle_aggregation_failure(aggregation_id, "insufficient_nodes")
+
+    def add_node_contribution(self, aggregation_id: str, node_id: str, model_weights: Dict):
+        """Add a node's model weights to the aggregation"""
+        if aggregation_id in self.pending_aggregations:
+            self.pending_aggregations[aggregation_id]['collected_weights'][node_id] = model_weights
+            
+            collected_count = len(self.pending_aggregations[aggregation_id]['collected_weights'])
+            expected_count = len(self.pending_aggregations[aggregation_id]['expected_nodes'])
+            
+            logger.info(f"Added contribution from {node_id} to {aggregation_id} ({collected_count}/{expected_count})")
+        else:
+            logger.warning(f"Received contribution for unknown aggregation {aggregation_id}")
+
+    async def _perform_aggregation(self, aggregation_id: str):
+        """Perform FedAvg aggregation"""
+        try:
+            logger.info(f"Performing FedAvg aggregation for {aggregation_id}")
+            
+            aggregation_info = self.pending_aggregations[aggregation_id]
+            node_weights = aggregation_info['collected_weights']
+            participating_nodes = list(node_weights.keys())
+            
+            # Compute FedAvg
+            aggregated_weights = self._compute_fedavg(node_weights, participating_nodes)
+            
+            # Store aggregated weights before submitting confirmation
+            aggregation_info['aggregated_weights'] = aggregated_weights
+            
+            # Submit aggregation confirmation transaction
+            await self._submit_aggregation_confirmation(
+                aggregation_id,
+                aggregated_weights,
+                participating_nodes,
+                aggregation_info['workflow_id'],
+                aggregation_info['round_number']
+            )
+            
+            # Don't clean up yet - wait for confirmation event to broadcast
+            
+            logger.info(f"Successfully completed aggregation {aggregation_id}")
+            
+        except Exception as e:
+            logger.error(f"Error performing aggregation: {e}")
+            await self._handle_aggregation_failure(aggregation_id, str(e))
+
+    def _compute_fedavg(self, node_weights: Dict[str, Dict], participating_nodes: List[str]) -> Dict:
+        """Compute FedAvg aggregation"""
+        logger.info(f"Computing FedAvg for {len(participating_nodes)} nodes")
+        
+        aggregated_weights = {}
+        
+        # Get first node's weights structure
+        first_node = participating_nodes[0]
+        weight_structure = node_weights[first_node]
+        
+        # Initialize aggregated weights
+        for layer_name in weight_structure:
+            aggregated_weights[layer_name] = np.zeros_like(np.array(weight_structure[layer_name]))
+        
+        # Weighted averaging (equal weights for simplicity)
+        for node_id in participating_nodes:
+            node_weight_dict = node_weights[node_id]
+            weight_factor = 1.0 / len(participating_nodes)
+            
+            for layer_name in node_weight_dict:
+                layer_weights = np.array(node_weight_dict[layer_name])
+                aggregated_weights[layer_name] += weight_factor * layer_weights
+        
+        # Convert back to lists for JSON serialization
+        for layer_name in aggregated_weights:
+            aggregated_weights[layer_name] = aggregated_weights[layer_name].tolist()
+        
+        logger.info("FedAvg computation completed")
+        return aggregated_weights
+
+    async def _submit_aggregation_confirmation(self, aggregation_id: str, aggregated_weights: Dict,
+                                             participating_nodes: List[str], workflow_id: str, round_number: int):
+        """Submit aggregation confirmation transaction"""
+        try:
+            logger.info(f"Submitting aggregation confirmation for {aggregation_id}")
+            
+            payload = {
+                'aggregation_id': aggregation_id,
+                'aggregator_node': self.node_id,
+                'aggregated_weights': aggregated_weights,
+                'participating_nodes': participating_nodes,
+                'workflow_id': workflow_id,
+                'round_number': round_number,
+                'aggregation_time': time.time()
+            }
+            
+            # Create and submit transaction
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self._create_and_submit_confirmation_transaction, payload)
+                result = future.result()
+                
+                logger.info(f"Aggregation confirmation submitted: {result}")
+                
+                # Broadcast aggregated model to participating nodes via ZMQ
+                await self._broadcast_aggregated_model(
+                    aggregated_weights, 
+                    participating_nodes, 
+                    workflow_id, 
+                    round_number
+                )
+                
+        except Exception as e:
+            logger.error(f"Error submitting aggregation confirmation: {e}")
+            raise
+
+    def _create_and_submit_confirmation_transaction(self, payload: Dict) -> Dict:
+        """Create and submit aggregation confirmation transaction"""
+        try:
+            confirmation_txn = create_transaction(
+                AGGREGATION_CONFIRMATION_FAMILY_NAME,
+                '1.0',
+                payload,
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE],
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE]
+            )
+            
+            batch = create_batch([confirmation_txn])
+            return submit_batch(batch)
+            
+        except Exception as e:
+            logger.error(f"Error creating confirmation transaction: {e}")
+            raise
+
+    async def _broadcast_aggregated_model(self, aggregated_weights: Dict, participating_nodes: List[str],
+                                        workflow_id: str, round_number: int, validation_metrics: Dict = None):
+        """Broadcast aggregated model to all participating IoT nodes via ZMQ"""
+        try:
+            logger.info(f"Broadcasting aggregated model to {len(participating_nodes)} nodes via ZMQ")
+            
+            # Create ZMQ context and socket for broadcasting
+            zmq_context = zmq.asyncio.Context()
+            
+            # Broadcast data
+            broadcast_data = {
+                'event_type': 'aggregated_model_ready',
+                'workflow_id': workflow_id,
+                'round_number': round_number,
+                'aggregated_weights': aggregated_weights,
+                'participating_nodes': participating_nodes,
+                'aggregator_node': self.node_id,
+                'timestamp': time.time(),
+                'status': 'COMPLETE',
+                'validation_metrics': validation_metrics or {}
+            }
+            
+            # Send to each participating IoT node via ZMQ
+            for node_id in participating_nodes:
+                try:
+                    # Connect to IoT node's ZMQ response port
+                    zmq_socket = zmq_context.socket(zmq.REQ)
+                    zmq_socket.connect(f"tcp://{node_id}:5555")  # Standard IoT node ZMQ port
+                    
+                    # Send aggregated model
+                    await zmq_socket.send_string(json.dumps(broadcast_data))
+                    
+                    # Wait for acknowledgment
+                    response = await asyncio.wait_for(zmq_socket.recv_string(), timeout=10.0)
+                    response_data = json.loads(response)
+                    
+                    if response_data.get('status') == 'received':
+                        logger.info(f"✓ Successfully broadcasted aggregated model to {node_id}")
+                    else:
+                        logger.warning(f"⚠ Unexpected response from {node_id}: {response_data}")
+                    
+                    zmq_socket.close()
+                    
+                except Exception as e:
+                    logger.error(f"✗ Failed to broadcast to {node_id}: {e}")
+                    if 'zmq_socket' in locals():
+                        zmq_socket.close()
+            
+            # Also publish to Redis pub/sub for inter-compute coordination
+            inter_compute_event = {
+                'event_type': 'aggregation_completed',
+                'workflow_id': workflow_id,
+                'round_number': round_number,
+                'aggregator_node': self.node_id,
+                'participating_nodes': participating_nodes,
+                'timestamp': time.time()
+            }
+            await self.redis.publish('federated_events', json.dumps(inter_compute_event))
+            
+            zmq_context.term()
+            logger.info("Aggregated model broadcast completed")
+            
+        except Exception as e:
+            logger.error(f"Error broadcasting aggregated model: {e}")
+            if 'zmq_context' in locals():
+                zmq_context.term()
+
+    async def _handle_aggregation_failure(self, aggregation_id: str, error_reason: str):
+        """Handle aggregation failure"""
+        try:
+            logger.error(f"Aggregation {aggregation_id} failed: {error_reason}")
+            
+            # Store failure information
+            failure_data = {
+                'aggregation_id': aggregation_id,
+                'error_reason': error_reason,
+                'aggregator_node': self.node_id,
+                'failure_time': time.time()
+            }
+            
+            await self.redis.setex(f"aggregation_failure_{aggregation_id}", 3600, json.dumps(failure_data))
+            
+            # Publish failure event
+            failure_event = {
+                'event_type': 'aggregation_failed',
+                'aggregation_id': aggregation_id,
+                'error_reason': error_reason,
+                'aggregator_node': self.node_id,
+                'timestamp': time.time()
+            }
+            
+            await self.redis.publish('federated_events', json.dumps(failure_event))
+            
+            # Clean up
+            if aggregation_id in self.pending_aggregations:
+                del self.pending_aggregations[aggregation_id]
+                
+        except Exception as e:
+            logger.error(f"Error handling aggregation failure: {e}")
+
+
+def handle_aggregation_event(event, aggregator: FederatedAggregator):
+    """Handle aggregation-related events"""
+    if event.event_type == "aggregation-request":
+        logger.info("Aggregation Event Handler: aggregation-request event")
+        
+        aggregation_id = None
+        workflow_id = None
+        node_id = None
+        round_number = None
+        aggregator_node = None
+        
+        for attr in event.attributes:
+            if attr.key == "aggregation_id":
+                aggregation_id = attr.value
+            elif attr.key == "workflow_id":
+                workflow_id = attr.value
+            elif attr.key == "node_id":
+                node_id = attr.value
+            elif attr.key == "round_number":
+                round_number = int(attr.value)
+            elif attr.key == "aggregator_node":
+                aggregator_node = attr.value
+        
+        if aggregator_node == aggregator.node_id:
+            logger.info(f"This node ({aggregator.node_id}) is assigned as aggregator for {aggregation_id}")
+            
+            # Get expected nodes from environment or default
+            expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
+            
+            # Start aggregation collection asynchronously
+            asyncio.create_task(aggregator.start_aggregation_collection(
+                aggregation_id, workflow_id, round_number, expected_nodes
+            ))
+        else:
+            logger.info(f"Aggregation {aggregation_id} assigned to different node: {aggregator_node}")
+            
+    elif event.event_type == "aggregation-confirmation":
+        logger.info("Aggregation Event Handler: aggregation-confirmation event")
+        # Extract validation metrics and broadcast to IoT nodes
+        aggregation_id = None
+        aggregator_node = None
+        workflow_id = None
+        round_number = None
+        validation_score = None
+        participating_nodes = None
+        
+        for attr in event.attributes:
+            if attr.key == "aggregation_id":
+                aggregation_id = attr.value
+            elif attr.key == "aggregator_node":
+                aggregator_node = attr.value
+            elif attr.key == "workflow_id":
+                workflow_id = attr.value
+            elif attr.key == "round_number":
+                round_number = int(attr.value)
+            elif attr.key == "validation_score":
+                validation_score = float(attr.value)
+            elif attr.key == "participating_nodes":
+                participating_nodes = json.loads(attr.value)
+        
+        # If this node was the aggregator, get the aggregated weights and broadcast with validation metrics
+        if aggregator_node == node_id and aggregation_id in aggregator.pending_aggregations:
+            logger.info(f"Broadcasting confirmed aggregation {aggregation_id} with validation score {validation_score}")
+            aggregation_info = aggregator.pending_aggregations[aggregation_id]
+            
+            # Get aggregated weights from memory
+            aggregated_weights = aggregation_info.get('aggregated_weights', {})
+            
+            # Create validation metrics
+            validation_metrics = {
+                'accuracy': validation_score,  # The validation score IS the accuracy on MNIST validation set
+                'validation_score': validation_score,
+                'validated_by_blockchain': True
+            }
+            
+            # Broadcast with validation metrics
+            asyncio.create_task(aggregator._broadcast_aggregated_model(
+                aggregated_weights,
+                participating_nodes,
+                workflow_id,
+                round_number,
+                validation_metrics
+            ))
+        
+    else:
+        logger.info(f"Aggregation Event Handler: Unhandled event type: {event.event_type}")
+
+
+def create_transaction(family_name, family_version, payload, inputs, outputs):
+    payload_bytes = json.dumps(payload).encode()
+
+    txn_header = TransactionHeader(
+        family_name=family_name,
+        family_version=family_version,
+        inputs=inputs,
+        outputs=outputs,
+        signer_public_key=signer.get_public_key().as_hex(),
+        batcher_public_key=signer.get_public_key().as_hex(),
+        dependencies=[],
+        payload_sha512=hashlib.sha512(payload_bytes).hexdigest(),
+        nonce=hex(int(time.time()))
+    ).SerializeToString()
+
+    signature = signer.sign(txn_header)
+
+    txn = Transaction(
+        header=txn_header,
+        header_signature=signature,
+        payload=payload_bytes
+    )
+
+    return txn
+
+
+def create_batch(transactions):
+    batch_header = BatchHeader(
+        signer_public_key=signer.get_public_key().as_hex(),
+        transaction_ids=[t.header_signature for t in transactions],
+    ).SerializeToString()
+
+    signature = signer.sign(batch_header)
+
+    return Batch(
+        header=batch_header,
+        transactions=transactions,
+        header_signature=signature
+    )
+
+
+def submit_batch(batch):
+    batch_list = BatchList(batches=[batch])
+    response = stream.send(
+        message_type=Message.CLIENT_BATCH_SUBMIT_REQUEST,
+        content=batch_list.SerializeToString()
+    ).result()
+    return process_future_result(response)
+
+
+def process_future_result(future_result):
+    response = ClientBatchSubmitResponse()
+    response.ParseFromString(future_result.content)
+
+    if response.status == ClientBatchSubmitResponse.OK:
+        return {
+            "status": "SUCCESS",
+            "message": "Batch submitted successfully"
+        }
+    elif response.status == ClientBatchSubmitResponse.INVALID_BATCH:
+        return {
+            "status": "FAILURE",
+            "message": "Invalid batch submitted",
+            "error_details": response.error_message
+        }
+    else:
+        return {
+            "status": "FAILURE",
+            "message": f"Batch submission failed with status: {response.status}",
+            "error_details": response.error_message
+        }
+
+
+def main():
+    logger.info("Starting Aggregation Event Handler")
+    
+    # Initialize aggregator
+    aggregator = FederatedAggregator(node_id, redis)
+
+    # Set up event subscriptions
+    aggregation_request_event = EventSubscription(
+        event_type="aggregation-request"
+    )
+    
+    aggregation_confirmation_event = EventSubscription(
+        event_type="aggregation-confirmation"
+    )
+
+    request = ClientEventsSubscribeRequest(
+        subscriptions=[aggregation_request_event, aggregation_confirmation_event]
+    )
+
+    logger.info(f"Subscribing request: {request}")
+    response_future = stream.send(
+        message_type=Message.CLIENT_EVENTS_SUBSCRIBE_REQUEST,
+        content=request.SerializeToString()
+    )
+    response = ClientEventsSubscribeResponse()
+    response.ParseFromString(response_future.result().content)
+
+    if response.status != ClientEventsSubscribeResponse.OK:
+        logger.error(f"Subscription failed: {response.response_message}")
+        return
+
+    logger.info("Aggregation Handler: Subscription successful. Listening for events...")
+
+    while True:
+        try:
+            msg_future = stream.receive()
+            msg = msg_future.result()
+            if msg.message_type == Message.CLIENT_EVENTS:
+                event_list = EventList()
+                event_list.ParseFromString(msg.content)
+                for event in event_list.events:
+                    handle_aggregation_event(event, aggregator)
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            logger.error(f"Error receiving message: {e}")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+    redis = initialize_redis()
+    node_id = os.getenv('NODE_ID')
+    stream = Stream(url=os.getenv('VALIDATOR_URL', 'tcp://validator:4004'))
+    context = create_context('secp256k1')
+    signer = CryptoFactory(context).new_signer(load_private_key())
+    main()

@@ -15,22 +15,16 @@ docker build -t $DOCKER_USERNAME/docker-image-tp:latest ./auto-docker-deployment
 
 # Build MNIST Federated Learning sample applications FIRST
 echo "Building MNIST Federated Learning applications..."
-docker build -t $DOCKER_USERNAME/mnist-fl-local-training:latest ./sample-apps/mnist-federated-learning/task1_local_training
-docker build -t $DOCKER_USERNAME/mnist-fl-aggregate-models:latest ./sample-apps/mnist-federated-learning/task2_aggregate_models
-docker build -t $DOCKER_USERNAME/mnist-fl-model-evaluation:latest ./sample-apps/mnist-federated-learning/task3_model_evaluation
+docker build -t $DOCKER_USERNAME/federated-training-task:latest ./sample-apps/mnist-federated-learning/federated-training-task
 
 # Create application tar files for deployment
 echo "Creating application tar files..."
 mkdir -p ./sample-apps/mnist-federated-learning/deployment
-docker save $DOCKER_USERNAME/mnist-fl-local-training:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz
-docker save $DOCKER_USERNAME/mnist-fl-aggregate-models:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz
-docker save $DOCKER_USERNAME/mnist-fl-model-evaluation:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz
+docker save $DOCKER_USERNAME/federated-training-task:latest | gzip > ./sample-apps/mnist-federated-learning/deployment/federated-training-task.tar.gz
 
 # Copy MNIST tar files to docker-image-client directory for Dockerfile access
 echo "Copying MNIST tar files to docker-image-client directory..."
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-local-training.tar.gz ./auto-docker-deployment/docker-image-client/
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-aggregate-models.tar.gz ./auto-docker-deployment/docker-image-client/
-cp ./sample-apps/mnist-federated-learning/deployment/mnist-fl-model-evaluation.tar.gz ./auto-docker-deployment/docker-image-client/
+cp ./sample-apps/mnist-federated-learning/deployment/federated-training-task.tar.gz ./auto-docker-deployment/docker-image-client/
 
 # NOW build docker-image-client with tar files available
 echo "Building docker-image-client with MNIST applications..."
@@ -48,15 +42,17 @@ docker build -t $DOCKER_USERNAME/schedule-confirmation-tp:latest ./scheduling/sc
 docker build -t $DOCKER_USERNAME/schedule-status-update-tp:latest ./scheduling/status-update-tp
 # Build iot-data-tp image
 docker build -t $DOCKER_USERNAME/iot-data-tp:latest ./scheduling/iot-data-tp
+
+# Build Federated Learning Transaction Processors
+echo "Building Federated Learning Transaction Processors..."
+docker build -t $DOCKER_USERNAME/aggregation-request-tp:latest ./scheduling/aggregation-request-tp
+docker build -t $DOCKER_USERNAME/aggregation-confirmation-tp:latest ./scheduling/aggregation-confirmation-tp
+docker build -t $DOCKER_USERNAME/validation-dataset-distributor:latest ./scheduling/validation-dataset-distributor
+
 # Build iot-node image
 docker build -t $DOCKER_USERNAME/iot-node:latest ./iot-node
 # Build compute-node image
 docker build -t $DOCKER_USERNAME/compute-node:latest ./compute-node
-
-# Build Federated Learning Coordinator
-echo "Building Federated Learning Coordinator..."
-# Build federated-schedule transaction processor
-docker build -t $DOCKER_USERNAME/federated-schedule-tp:latest ./scheduling/federated-schedule-tp
 
 
 # Push images to Docker Hub
@@ -72,12 +68,15 @@ docker push $DOCKER_USERNAME/iot-data-tp:latest
 docker push $DOCKER_USERNAME/compute-node:latest
 docker push $DOCKER_USERNAME/iot-node:latest
 
+# Push Federated Learning Transaction Processors
+echo "Pushing Federated Learning Transaction Processors..."
+docker push $DOCKER_USERNAME/aggregation-request-tp:latest
+docker push $DOCKER_USERNAME/aggregation-confirmation-tp:latest
+docker push $DOCKER_USERNAME/validation-dataset-distributor:latest
+
 # Push MNIST Federated Learning images
-echo "Pushing MNIST Federated Learning images..."
-docker push $DOCKER_USERNAME/mnist-fl-local-training:latest
-docker push $DOCKER_USERNAME/mnist-fl-aggregate-models:latest
-docker push $DOCKER_USERNAME/mnist-fl-model-evaluation:latest
-docker push $DOCKER_USERNAME/federated-schedule-tp:latest
+echo "Pushing MNIST Federated Learning applications..."
+docker push $DOCKER_USERNAME/federated-training-task:latest
 
 echo "All images built and pushed to registry successfully"
 echo "MNIST Federated Learning application files created in ./sample-apps/mnist-federated-learning/deployment/"

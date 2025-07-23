@@ -174,7 +174,7 @@ class IoTDataTransactionHandler(TransactionHandler):
             workflow_id = payload['workflow_id']
             schedule_id = payload['schedule_id']
             persist_data = payload.get('persist_data', False)
-            node_id = payload.get('node_id')  # New: Node identifier for federated learning
+            node_id = payload.get('node_id')  # Node identifier for federated learning
 
             logger.info(f"Processing IoT data for workflow ID: {workflow_id}, schedule ID: {schedule_id}, node ID: {node_id}")
 
@@ -459,7 +459,7 @@ class IoTDataTransactionHandler(TransactionHandler):
             logger.error(f"Error scheduling timeout check: {e}")
 
     async def _get_federated_round_info(self, workflow_id):
-        """Get federated round information from blockchain via federated-schedule-tp state"""
+        """Get federated round information from aggregation-request-tp state"""
         try:
             # Try to get from Redis cache first
             cache_key = f"fed_round_cache_{workflow_id}"
@@ -537,10 +537,10 @@ class IoTDataTransactionHandler(TransactionHandler):
                         'aggregation_strategy': federated_metadata.get('aggregation_strategy', 'fedavg')
                     }
             
-            # Cross-TP communication: Query federated-schedule-tp blockchain state
-            federated_round_info = await self._query_federated_schedule_tp_state(workflow_id)
+            # Query aggregation-request-tp state for federated round info
+            federated_round_info = await self._query_aggregation_request_state(workflow_id)
             if federated_round_info:
-                logger.info(f"Retrieved federated round info from blockchain via federated-schedule-tp")
+                logger.info(f"Retrieved federated round info from aggregation-request-tp")
                 return federated_round_info
             
             return None
@@ -549,50 +549,30 @@ class IoTDataTransactionHandler(TransactionHandler):
             logger.error(f"Error querying blockchain for federated round: {str(e)}")
             return None
     
-    async def _query_federated_schedule_tp_state(self, workflow_id):
-        """Query federated-schedule-tp blockchain state using address calculation"""
+    async def _query_aggregation_request_state(self, workflow_id):
+        """Query aggregation-request-tp state for federated round info"""
         try:
-            # Calculate the federated-schedule-tp state address
-            # This mirrors the address calculation in federated_schedule_tp.py
-            FEDERATED_NAMESPACE = hashlib.sha512('federated-schedule'.encode()).hexdigest()[:6]
+            # Check Redis for aggregation round information
+            aggregation_key = f"aggregation_round_{workflow_id}_1"
+            aggregation_data = await self.redis.get(aggregation_key)
             
-            # Try different possible address patterns
-            potential_addresses = [
-                f"fed_round:{workflow_id}:1",
-                f"federated_schedule:{workflow_id}",
-                f"fed_coordinator:{workflow_id}"
-            ]
-            
-            for address_suffix in potential_addresses:
-                try:
-                    # Calculate full blockchain address
-                    full_address = FEDERATED_NAMESPACE + hashlib.sha512(address_suffix.encode()).hexdigest()[:64]
-                    
-                    # This would require context access which we don't have in async operations
-                    # For now, use Redis as the cross-TP communication channel
-                    redis_key = f"blockchain_state_{full_address}"
-                    blockchain_state = await self.redis.get(redis_key)
-                    
-                    if blockchain_state:
-                        state_data = json.loads(blockchain_state)
-                        logger.info(f"Found blockchain state for federated schedule: {address_suffix}")
-                        return {
-                            'min_nodes_required': state_data.get('min_nodes_required', 3),
-                            'expected_nodes': state_data.get('expected_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
-                            'workflow_type': 'federated_learning',
-                            'coordinator_node': state_data.get('coordinator_node'),
-                            'schedule_id': state_data.get('schedule_id'),
-                            'status': state_data.get('status', 'active'),
-                            'round_number': state_data.get('round_number', 1)
-                        }
-                except Exception as e:
-                    logger.debug(f"No state found for address pattern {address_suffix}: {e}")
-                    continue
+            if aggregation_data:
+                state_data = json.loads(aggregation_data)
+                logger.info(f"Found aggregation round info for workflow {workflow_id}")
+                return {
+                    'min_nodes_required': state_data.get('min_nodes_required', 3),
+                    'expected_nodes': state_data.get('participating_nodes', ['iot-0', 'iot-1', 'iot-2', 'iot-3', 'iot-4']),
+                    'workflow_type': 'federated_learning',
+                    'aggregator_node': state_data.get('aggregator_node'),
+                    'workflow_id': workflow_id,
+                    'status': state_data.get('status', 'active'),
+                    'round_number': state_data.get('round_number', 1)
+                }
             
             return None
             
         except Exception as e:
-            logger.error(f"Error querying federated-schedule-tp state: {str(e)}")
+            logger.error(f"Error querying aggregation-request-tp state: {str(e)}")
             return None
     
     async def _get_workflow_dependency_graph(self, workflow_id):
