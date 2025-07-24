@@ -1171,6 +1171,33 @@ spec:
         - name: validation-dataset-distributor
           image: murtazahr/validation-dataset-distributor:latest
           env:
+            - name: COUCHDB_HOST
+              value: "couchdb-0.default.svc.cluster.local:6984"
+            - name: COUCHDB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: couchdb-secrets
+                  key: COUCHDB_USER
+            - name: COUCHDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: couchdb-secrets
+                  key: COUCHDB_PASSWORD
+            - name: COUCHDB_SSL_CERT
+              valueFrom:
+                secretKeyRef:
+                  name: couchdb-certs
+                  key: node0_crt
+            - name: COUCHDB_SSL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: couchdb-certs
+                  key: node0_key
+            - name: COUCHDB_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: couchdb-certs
+                  key: ca.crt
             - name: REDIS_HOST
               value: "redis-cluster"
             - name: REDIS_PORT
@@ -1195,7 +1222,14 @@ spec:
                 secretKeyRef:
                   name: redis-certificates
                   key: ca.crt
+          volumeMounts:
+            - name: couchdb-certs
+              mountPath: /certs
       restartPolicy: OnFailure
+      volumes:
+        - name: couchdb-certs
+          secret:
+            secretName: couchdb-certs
   backoffLimit: 3
 EOF
 

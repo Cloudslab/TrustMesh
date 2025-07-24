@@ -10,9 +10,10 @@ import traceback
 import numpy as np
 from typing import Dict, List, Any
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import datasets, transforms
 
 from sawtooth_sdk.processor.handler import TransactionHandler
 from sawtooth_sdk.processor.exceptions import InvalidTransaction
@@ -57,6 +58,30 @@ MNIST_INPUT_SHAPE = (28, 28, 1)
 NUM_CLASSES = 10
 
 logger = logging.getLogger(__name__)
+
+
+class MNISTNet(nn.Module):
+    """PyTorch CNN model for MNIST (must match training task architecture)"""
+    def __init__(self, num_classes=10):
+        super(MNISTNet, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(64 * 7 * 7, 64)  # 28x28 -> 14x14 -> 7x7 after pooling
+        self.fc2 = nn.Linear(64, num_classes)
+        self.dropout = nn.Dropout(0.2)
+        
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))
+        x = self.pool2(F.relu(self.conv2(x)))
+        x = F.relu(self.conv3(x))
+        x = self.flatten(x)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = F.softmax(self.fc2(x), dim=1)
+        return x
 
 
 class AggregationConfirmationTransactionHandler(TransactionHandler):
@@ -587,7 +612,7 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
         try:
             logger.info("Performing MNIST validation dataset evaluation")
             
-            # Retrieve validation dataset from Redis
+            # Retrieve validation dataset from CouchDB
             validation_data = self.loop.run_until_complete(self._get_validation_dataset())
             
             if not validation_data:
@@ -602,12 +627,13 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             # Create model architecture (must match training task)
             model = self._create_validation_model()
             
-            # Load aggregated weights
+            # Load aggregated weights (PyTorch state_dict format)
             try:
-                weight_arrays = []
-                for layer_name in sorted(aggregated_weights.keys()):
-                    weight_arrays.append(np.array(aggregated_weights[layer_name]))
-                model.set_weights(weight_arrays)
+                state_dict = {}
+                for layer_name, weights in aggregated_weights.items():
+                    state_dict[layer_name] = torch.tensor(weights, dtype=torch.float32)
+                model.load_state_dict(state_dict)
+                model.eval()
             except Exception as e:
                 logger.error(f"Error loading aggregated weights: {e}")
                 return {
@@ -621,12 +647,21 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             x_val = np.array(validation_data['x_data'])
             y_val = np.array(validation_data['y_data'])
             
-            # Reshape if needed
+            # Convert to PyTorch tensors and reshape
             if len(x_val.shape) == 3:
-                x_val = x_val.reshape(x_val.shape[0], 28, 28, 1)
+                x_val = x_val.reshape(x_val.shape[0], 1, 28, 28)  # PyTorch format: (N, C, H, W)
+            x_val = torch.tensor(x_val, dtype=torch.float32)
+            y_val = torch.tensor(y_val, dtype=torch.long)
             
             # Evaluate model (deterministic)
-            loss, accuracy = model.evaluate(x_val, y_val, verbose=0)
+            with torch.no_grad():
+                outputs = model(x_val)
+                predictions = torch.argmax(outputs, dim=1)
+                accuracy = (predictions == y_val).float().mean().item()
+                
+                # Calculate loss
+                loss_fn = nn.CrossEntropyLoss()
+                loss = loss_fn(outputs, y_val).item()
             
             # Check if accuracy meets minimum threshold
             passed = accuracy >= MIN_ACCURACY_THRESHOLD
@@ -658,26 +693,10 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 'details': {'error': str(e)}
             }
 
-    def _create_validation_model(self) -> keras.Model:
+    def _create_validation_model(self) -> MNISTNet:
         """Create MNIST model for validation (must match training task architecture)"""
-        model = keras.Sequential([
-            layers.Reshape(MNIST_INPUT_SHAPE, input_shape=(28, 28)),
-            layers.Conv2D(32, (3, 3), activation='relu'),
-            layers.MaxPooling2D((2, 2)),
-            layers.Conv2D(64, (3, 3), activation='relu'),
-            layers.MaxPooling2D((2, 2)),
-            layers.Conv2D(64, (3, 3), activation='relu'),
-            layers.Flatten(),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(NUM_CLASSES, activation='softmax')
-        ])
-        
-        model.compile(
-            optimizer='adam',
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']
-        )
-        
+        model = MNISTNet(num_classes=NUM_CLASSES)
+        model.eval()  # Set to evaluation mode
         return model
 
     async def _get_validation_dataset(self) -> Dict:

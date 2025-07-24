@@ -10,7 +10,10 @@ import asyncio
 import logging
 import time
 import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import datasets, transforms
 from datetime import datetime
 from typing import Dict, List, Optional
 import json
@@ -38,6 +41,30 @@ logger = logging.getLogger(__name__)
 TOTAL_NODES = 5
 FEDERATED_ROUND_INTERVAL = 180  # 3 minutes between rounds
 SAMPLES_PER_NODE = 2000
+
+
+class MNISTNet(nn.Module):
+    """PyTorch CNN model for MNIST (must match training task architecture)"""
+    def __init__(self, num_classes=10):
+        super(MNISTNet, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(64 * 7 * 7, 64)  # 28x28 -> 14x14 -> 7x7 after pooling
+        self.fc2 = nn.Linear(64, num_classes)
+        self.dropout = nn.Dropout(0.2)
+        
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))
+        x = self.pool2(F.relu(self.conv2(x)))
+        x = F.relu(self.conv3(x))
+        x = self.flatten(x)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = F.softmax(self.fc2(x), dim=1)
+        return x
 
 
 class MNISTFederatedNode:
@@ -86,8 +113,16 @@ class MNISTFederatedNode:
     def _load_data_partition(self):
         """Load MNIST data partition for this node"""
         try:
-            # Load MNIST dataset
-            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+            # Load MNIST dataset using torchvision
+            transform = transforms.Compose([transforms.ToTensor()])
+            train_dataset = datasets.MNIST(root='/tmp/mnist', train=True, download=True, transform=transform)
+            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=True, transform=transform)
+            
+            # Convert to numpy arrays for compatibility
+            x_train = train_dataset.data.numpy()
+            y_train = train_dataset.targets.numpy()
+            x_test = test_dataset.data.numpy()
+            y_test = test_dataset.targets.numpy()
             
             logger.info(f"Loaded MNIST dataset: {len(x_train)} training samples total")
             
@@ -234,41 +269,38 @@ class MNISTFederatedNode:
         """Evaluate model on local test data"""
         try:
             # Create model architecture (must match training task)
-            model = tf.keras.Sequential([
-                tf.keras.layers.Reshape((28, 28, 1), input_shape=(28, 28)),
-                tf.keras.layers.Conv2D(32, (3, 3), activation='relu'),
-                tf.keras.layers.MaxPooling2D((2, 2)),
-                tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-                tf.keras.layers.MaxPooling2D((2, 2)),
-                tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(64, activation='relu'),
-                tf.keras.layers.Dense(10, activation='softmax')
-            ])
+            model = MNISTNet(num_classes=10)
+            model.eval()
             
-            model.compile(
-                optimizer='adam',
-                loss='sparse_categorical_crossentropy',
-                metrics=['accuracy']
-            )
-            
-            # Load weights
-            weight_arrays = []
-            for layer_name in sorted(model_weights.keys()):
-                weight_arrays.append(np.array(model_weights[layer_name]))
-            
-            model.set_weights(weight_arrays)
+            # Load weights from state_dict format
+            try:
+                state_dict = {}
+                for layer_name, weights in model_weights.items():
+                    state_dict[layer_name] = torch.tensor(weights, dtype=torch.float32)
+                model.load_state_dict(state_dict)
+            except Exception as e:
+                logger.error(f"Error loading model weights: {e}")
+                return 0.0
             
             # Prepare test data
             x_test = np.array(self.data_partition['x_test']).astype('float32') / 255.0
             y_test = np.array(self.data_partition['y_test'])
             
-            # Reshape if needed
+            # Convert to PyTorch tensors and reshape for CNN (N, C, H, W)
             if len(x_test.shape) == 3:
-                x_test = x_test.reshape(x_test.shape[0], 28, 28, 1)
+                x_test = x_test.reshape(x_test.shape[0], 1, 28, 28)
+            x_test_tensor = torch.tensor(x_test, dtype=torch.float32)
+            y_test_tensor = torch.tensor(y_test, dtype=torch.long)
             
             # Evaluate on local test set
-            loss, accuracy = model.evaluate(x_test, y_test, verbose=0)
+            with torch.no_grad():
+                outputs = model(x_test_tensor)
+                predictions = torch.argmax(outputs, dim=1)
+                accuracy = (predictions == y_test_tensor).float().mean().item()
+                
+                # Calculate loss
+                loss_fn = nn.CrossEntropyLoss()
+                loss = loss_fn(outputs, y_test_tensor).item()
             
             logger.info(f"Local validation - Accuracy: {accuracy:.4f}, Loss: {loss:.4f} on {len(x_test)} samples")
             

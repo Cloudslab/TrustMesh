@@ -14,10 +14,12 @@ import sys
 import time
 from typing import Dict, List, Any, Tuple
 
-# TensorFlow/Keras for MNIST training
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+# PyTorch for MNIST training
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 
 # Setup logging
 logging.basicConfig(
@@ -27,10 +29,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Model configuration
-MNIST_INPUT_SHAPE = (28, 28, 1)
 NUM_CLASSES = 10
 EPOCHS_PER_ROUND = 3
 BATCH_SIZE = 32
+
+
+class MNISTNet(nn.Module):
+    """PyTorch CNN model for MNIST federated learning"""
+    def __init__(self, num_classes=10):
+        super(MNISTNet, self).__init__()
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.pool1 = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.pool2 = nn.MaxPool2d(2, 2)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.flatten = nn.Flatten()
+        self.fc1 = nn.Linear(64 * 7 * 7, 64)  # 28x28 -> 14x14 -> 7x7 after pooling
+        self.fc2 = nn.Linear(64, num_classes)
+        self.dropout = nn.Dropout(0.2)
+        
+    def forward(self, x):
+        x = self.pool1(F.relu(self.conv1(x)))
+        x = self.pool2(F.relu(self.conv2(x)))
+        x = F.relu(self.conv3(x))
+        x = self.flatten(x)
+        x = self.dropout(F.relu(self.fc1(x)))
+        x = F.softmax(self.fc2(x), dim=1)
+        return x
 
 
 class MNISTFederatedTrainer:
@@ -41,27 +66,13 @@ class MNISTFederatedTrainer:
         self.training_history = []
         logger.info("Initialized MNIST Federated Trainer")
     
-    def create_model(self) -> keras.Model:
+    def create_model(self) -> MNISTNet:
         """Create a simple CNN model for MNIST"""
-        model = keras.Sequential([
-            layers.Reshape(MNIST_INPUT_SHAPE, input_shape=(28, 28)),
-            layers.Conv2D(32, (3, 3), activation='relu'),
-            layers.MaxPooling2D((2, 2)),
-            layers.Conv2D(64, (3, 3), activation='relu'),
-            layers.MaxPooling2D((2, 2)),
-            layers.Conv2D(64, (3, 3), activation='relu'),
-            layers.Flatten(),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(NUM_CLASSES, activation='softmax')
-        ])
+        model = MNISTNet(num_classes=NUM_CLASSES)
         
-        model.compile(
-            optimizer='adam',
-            loss='sparse_categorical_crossentropy',
-            metrics=['accuracy']
-        )
-        
-        logger.info(f"Created MNIST model with {model.count_params()} parameters")
+        # Count parameters
+        total_params = sum(p.numel() for p in model.parameters())
+        logger.info(f"Created MNIST model with {total_params} parameters")
         return model
     
     def prepare_data(self, training_data: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
@@ -87,12 +98,12 @@ class MNISTFederatedTrainer:
             if not global_weights or not self.model:
                 return False
             
-            # Convert lists back to numpy arrays and set weights
-            weight_arrays = []
-            for layer_name in sorted(global_weights.keys()):
-                weight_arrays.append(np.array(global_weights[layer_name]))
+            # Convert lists to PyTorch tensors and create state_dict
+            state_dict = {}
+            for layer_name, weights in global_weights.items():
+                state_dict[layer_name] = torch.tensor(weights, dtype=torch.float32)
             
-            self.model.set_weights(weight_arrays)
+            self.model.load_state_dict(state_dict)
             logger.info(f"Loaded global weights from {len(global_weights)} layers")
             return True
             
@@ -105,40 +116,120 @@ class MNISTFederatedTrainer:
         try:
             logger.info(f"Starting local training on {len(x_train)} samples for {EPOCHS_PER_ROUND} epochs")
             
-            # Train the model
-            history = self.model.fit(
-                x_train, y_train,
-                batch_size=BATCH_SIZE,
-                epochs=EPOCHS_PER_ROUND,
-                validation_split=0.1,
-                verbose=1
-            )
+            # Convert numpy arrays to PyTorch tensors
+            # Reshape x_train to (N, 1, 28, 28) for PyTorch CNN
+            if len(x_train.shape) == 3:
+                x_train = x_train.reshape(x_train.shape[0], 1, 28, 28)
+            x_tensor = torch.tensor(x_train, dtype=torch.float32)
+            y_tensor = torch.tensor(y_train, dtype=torch.long)
             
-            # Extract trained weights
+            # Create DataLoader for batch training
+            dataset = TensorDataset(x_tensor, y_tensor)
+            
+            # Split into train and validation sets
+            val_size = int(0.1 * len(dataset))
+            train_size = len(dataset) - val_size
+            train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+            
+            train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False) if val_size > 0 else None
+            
+            # Set up optimizer and loss function
+            optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            criterion = nn.CrossEntropyLoss()
+            
+            self.model.train()
+            
+            # Training metrics tracking
+            epoch_losses = []
+            epoch_accuracies = []
+            val_losses = []
+            val_accuracies = []
+            
+            # Training loop
+            for epoch in range(EPOCHS_PER_ROUND):
+                epoch_loss = 0.0
+                correct_predictions = 0
+                total_samples = 0
+                
+                for batch_x, batch_y in train_loader:
+                    optimizer.zero_grad()
+                    
+                    # Forward pass
+                    outputs = self.model(batch_x)
+                    loss = criterion(outputs, batch_y)
+                    
+                    # Backward pass
+                    loss.backward()
+                    optimizer.step()
+                    
+                    # Track metrics
+                    epoch_loss += loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    total_samples += batch_y.size(0)
+                    correct_predictions += (predicted == batch_y).sum().item()
+                
+                # Calculate epoch metrics
+                avg_loss = epoch_loss / len(train_loader)
+                accuracy = correct_predictions / total_samples
+                epoch_losses.append(avg_loss)
+                epoch_accuracies.append(accuracy)
+                
+                # Validation if available
+                val_loss = None
+                val_accuracy = None
+                if val_loader:
+                    self.model.eval()
+                    val_epoch_loss = 0.0
+                    val_correct = 0
+                    val_total = 0
+                    
+                    with torch.no_grad():
+                        for val_x, val_y in val_loader:
+                            val_outputs = self.model(val_x)
+                            val_batch_loss = criterion(val_outputs, val_y)
+                            val_epoch_loss += val_batch_loss.item()
+                            
+                            _, val_predicted = torch.max(val_outputs.data, 1)
+                            val_total += val_y.size(0)
+                            val_correct += (val_predicted == val_y).sum().item()
+                    
+                    val_loss = val_epoch_loss / len(val_loader)
+                    val_accuracy = val_correct / val_total
+                    val_losses.append(val_loss)
+                    val_accuracies.append(val_accuracy)
+                    self.model.train()
+                
+                logger.info(f"Epoch {epoch+1}/{EPOCHS_PER_ROUND} - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}" + 
+                           (f", Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}" if val_loss else ""))
+            
+            # Extract trained weights as state_dict
             trained_weights = {}
-            for i, layer_weights in enumerate(self.model.get_weights()):
-                layer_name = f"layer_{i}"
-                trained_weights[layer_name] = layer_weights.tolist()
+            for name, param in self.model.state_dict().items():
+                trained_weights[name] = param.cpu().numpy().tolist()
             
-            # Compute training metrics
-            final_loss = history.history['loss'][-1]
-            final_accuracy = history.history['accuracy'][-1]
-            val_loss = history.history['val_loss'][-1] if 'val_loss' in history.history else None
-            val_accuracy = history.history['val_accuracy'][-1] if 'val_accuracy' in history.history else None
+            # Final metrics
+            final_loss = epoch_losses[-1]
+            final_accuracy = epoch_accuracies[-1]
+            final_val_loss = val_losses[-1] if val_losses else None
+            final_val_accuracy = val_accuracies[-1] if val_accuracies else None
+            
+            # Count parameters
+            total_params = sum(p.numel() for p in self.model.parameters())
             
             training_result = {
                 'trained_weights': trained_weights,
                 'training_metrics': {
                     'final_loss': float(final_loss),
                     'final_accuracy': float(final_accuracy),
-                    'val_loss': float(val_loss) if val_loss else None,
-                    'val_accuracy': float(val_accuracy) if val_accuracy else None,
+                    'val_loss': float(final_val_loss) if final_val_loss else None,
+                    'val_accuracy': float(final_val_accuracy) if final_val_accuracy else None,
                     'epochs_trained': EPOCHS_PER_ROUND,
                     'samples_trained': len(x_train)
                 },
                 'model_info': {
-                    'total_parameters': self.model.count_params(),
-                    'layer_count': len(self.model.layers),
+                    'total_parameters': total_params,
+                    'layer_count': len(list(self.model.named_parameters())),
                     'weight_layers': len(trained_weights)
                 }
             }

@@ -17,7 +17,9 @@ import tempfile
 import time
 from typing import Dict, List, Tuple
 
-import tensorflow as tf
+import torch
+import torchvision
+from torchvision import datasets, transforms
 from ibmcloudant.cloudant_v1 import CloudantV1
 from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
 from coredis import RedisCluster
@@ -195,10 +197,15 @@ class MNISTValidationDatasetDistributor:
             
             # Set seed for reproducibility
             np.random.seed(VALIDATION_SEED)
-            tf.random.set_seed(VALIDATION_SEED)
+            torch.manual_seed(VALIDATION_SEED)
             
             # Load MNIST test dataset (we'll use this as our validation set)
-            (_, _), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+            transform = transforms.Compose([transforms.ToTensor()])
+            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=True, transform=transform)
+            
+            # Convert to numpy arrays for compatibility with existing code
+            x_test = test_dataset.data.numpy()
+            y_test = test_dataset.targets.numpy()
             
             # Normalize pixel values to [0, 1]
             x_test = x_test.astype('float32') / 255.0
