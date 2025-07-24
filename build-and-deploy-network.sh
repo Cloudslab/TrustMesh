@@ -1263,30 +1263,6 @@ spec:
                 secretKeyRef:
                   name: couchdb-certs
                   key: ca.crt
-            - name: REDIS_HOST
-              value: "redis-cluster"
-            - name: REDIS_PORT
-              value: "6379"
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: redis-password
-                  key: password
-            - name: REDIS_SSL_CERT
-              valueFrom:
-                secretKeyRef:
-                  name: redis-certificates
-                  key: redis.crt
-            - name: REDIS_SSL_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: redis-certificates
-                  key: redis.key
-            - name: REDIS_SSL_CA
-              valueFrom:
-                secretKeyRef:
-                  name: redis-certificates
-                  key: ca.crt
           volumeMounts:
             - name: couchdb-certs
               mountPath: /certs
