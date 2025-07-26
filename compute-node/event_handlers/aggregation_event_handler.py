@@ -124,15 +124,15 @@ class FederatedAggregator:
         logger.info(f"Initialized FederatedAggregator for node {node_id}")
 
     async def start_aggregation_collection(self, aggregation_id: str, workflow_id: str, 
-                                         round_number: int, expected_nodes: List[str]):
+                                         global_round_number: int, expected_nodes: List[str]):
         """Start collecting model weights from participating nodes"""
         try:
-            logger.info(f"Starting aggregation collection for {aggregation_id}")
+            logger.info(f"Starting aggregation collection for {aggregation_id} (global round {global_round_number})")
             
             # Store aggregation metadata
             self.pending_aggregations[aggregation_id] = {
                 'workflow_id': workflow_id,
-                'round_number': round_number,
+                'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'expected_nodes': expected_nodes,
                 'collected_weights': {},
                 'start_time': time.time(),
@@ -204,7 +204,7 @@ class FederatedAggregator:
                 aggregated_weights,
                 participating_nodes,
                 aggregation_info['workflow_id'],
-                aggregation_info['round_number']
+                aggregation_info['global_round_number']
             )
             
             # Don't clean up yet - wait for confirmation event to broadcast
@@ -246,10 +246,10 @@ class FederatedAggregator:
         return aggregated_weights
 
     async def _submit_aggregation_confirmation(self, aggregation_id: str, aggregated_weights: Dict,
-                                             participating_nodes: List[str], workflow_id: str, round_number: int):
+                                             participating_nodes: List[str], workflow_id: str, global_round_number: int):
         """Submit aggregation confirmation transaction"""
         try:
-            logger.info(f"Submitting aggregation confirmation for {aggregation_id}")
+            logger.info(f"Submitting aggregation confirmation for {aggregation_id} (global round {global_round_number})")
             
             payload = {
                 'aggregation_id': aggregation_id,
@@ -257,7 +257,7 @@ class FederatedAggregator:
                 'aggregated_weights': aggregated_weights,
                 'participating_nodes': participating_nodes,
                 'workflow_id': workflow_id,
-                'round_number': round_number,
+                'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'aggregation_time': time.time()
             }
             
@@ -273,7 +273,7 @@ class FederatedAggregator:
                     aggregated_weights, 
                     participating_nodes, 
                     workflow_id, 
-                    round_number
+                    global_round_number
                 )
                 
         except Exception as e:
@@ -299,10 +299,10 @@ class FederatedAggregator:
             raise
 
     async def _broadcast_aggregated_model(self, aggregated_weights: Dict, participating_nodes: List[str],
-                                        workflow_id: str, round_number: int, validation_metrics: Dict = None):
+                                        workflow_id: str, global_round_number: int, validation_metrics: Dict = None):
         """Broadcast aggregated model to all participating IoT nodes via ZMQ"""
         try:
-            logger.info(f"Broadcasting aggregated model to {len(participating_nodes)} nodes via ZMQ")
+            logger.info(f"Broadcasting aggregated model to {len(participating_nodes)} nodes via ZMQ (global round {global_round_number})")
             
             # Create ZMQ context and socket for broadcasting
             zmq_context = zmq.asyncio.Context()
@@ -311,7 +311,7 @@ class FederatedAggregator:
             broadcast_data = {
                 'event_type': 'aggregated_model_ready',
                 'workflow_id': workflow_id,
-                'round_number': round_number,
+                'round_number': global_round_number,  # Use global round for IoT nodes
                 'aggregated_weights': aggregated_weights,
                 'participating_nodes': participating_nodes,
                 'aggregator_node': self.node_id,
@@ -350,7 +350,7 @@ class FederatedAggregator:
             inter_compute_event = {
                 'event_type': 'aggregation_completed',
                 'workflow_id': workflow_id,
-                'round_number': round_number,
+                'global_round_number': global_round_number,  # Use global round for consistency
                 'aggregator_node': self.node_id,
                 'participating_nodes': participating_nodes,
                 'timestamp': time.time()
@@ -407,7 +407,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
         aggregation_id = None
         workflow_id = None
         node_id = None
-        round_number = None
+        global_round_number = None
         aggregator_node = None
         
         for attr in event.attributes:
@@ -417,8 +417,8 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 workflow_id = attr.value
             elif attr.key == "node_id":
                 node_id = attr.value
-            elif attr.key == "round_number":
-                round_number = int(attr.value)
+            elif attr.key == "global_round_number":
+                global_round_number = int(attr.value)
             elif attr.key == "aggregator_node":
                 aggregator_node = attr.value
         
@@ -430,7 +430,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
             
             # Start aggregation collection asynchronously
             asyncio.create_task(aggregator.start_aggregation_collection(
-                aggregation_id, workflow_id, round_number, expected_nodes
+                aggregation_id, workflow_id, global_round_number, expected_nodes
             ))
         else:
             logger.info(f"Aggregation {aggregation_id} assigned to different node: {aggregator_node}")
@@ -441,7 +441,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
         aggregation_id = None
         aggregator_node = None
         workflow_id = None
-        round_number = None
+        global_round_number = None
         validation_score = None
         participating_nodes = None
         
@@ -452,8 +452,8 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 aggregator_node = attr.value
             elif attr.key == "workflow_id":
                 workflow_id = attr.value
-            elif attr.key == "round_number":
-                round_number = int(attr.value)
+            elif attr.key == "global_round_number":
+                global_round_number = int(attr.value)
             elif attr.key == "validation_score":
                 validation_score = float(attr.value)
             elif attr.key == "participating_nodes":
@@ -479,7 +479,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 aggregated_weights,
                 participating_nodes,
                 workflow_id,
-                round_number,
+                global_round_number,
                 validation_metrics
             ))
         

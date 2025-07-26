@@ -137,23 +137,24 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         workflow_id = payload['workflow_id']
         node_id = payload['node_id']
         model_weights = payload['model_weights']
-        round_number = payload.get('round_number', 1)
+        iot_round_number = payload.get('round_number', 1)  # IoT node's local round - ignore for aggregation logic
         
-        logger.info(f"Aggregation request - Workflow: {workflow_id}, Node: {node_id}, Round: {round_number}")
+        logger.info(f"Aggregation request - Workflow: {workflow_id}, Node: {node_id}, IoT Round: {iot_round_number} (ignored)")
 
         # Validate workflow exists and is federated
         if not self._validate_federated_workflow(context, workflow_id):
             logger.error(f"Invalid or non-federated workflow ID: {workflow_id}")
             raise InvalidTransaction(f"Invalid or non-federated workflow ID: {workflow_id}")
 
-        # Check for existing aggregation round
-        existing_round = self._get_existing_aggregation_round(context, workflow_id, round_number)
+        # Check for existing aggregation round (use workflow_id only, ignore IoT round numbers)
+        existing_round = self._get_existing_aggregation_round(context, workflow_id)
         
         if existing_round:
             # Join existing aggregation round
             aggregation_id = existing_round['aggregation_id']
             aggregator_node = existing_round['aggregator_node']
-            logger.info(f"Joining existing aggregation round {aggregation_id} with aggregator {aggregator_node}")
+            global_round = existing_round['global_round_number']
+            logger.info(f"Joining existing aggregation round {aggregation_id} (global round {global_round}) with aggregator {aggregator_node}")
             
             # Add this node's contribution to the round
             self._add_node_to_aggregation_round(context, aggregation_id, node_id, model_weights, payload)
@@ -161,14 +162,19 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         else:
             # Create new aggregation round - use consensus to elect aggregator
             aggregator_node = self.loop.run_until_complete(self._select_aggregator())
-            aggregation_id = f"{workflow_id}_agg_{round_number}_{int(time.time())}"
+            global_round_number = self._get_next_global_round_number(context, workflow_id)
+            aggregation_id = f"{workflow_id}_agg_{global_round_number}_{int(time.time())}"
             
-            logger.info(f"Creating new aggregation round {aggregation_id} with aggregator {aggregator_node}")
+            logger.info(f"Creating new aggregation round {aggregation_id} (global round {global_round_number}) with aggregator {aggregator_node}")
             
             # Create aggregation round record
             self._create_aggregation_round(context, workflow_id, aggregation_id, aggregator_node, 
-                                         round_number, node_id, model_weights, payload)
+                                         global_round_number, node_id, model_weights, payload)
 
+        # Get the global round number from the aggregation record
+        aggregation_round = existing_round if existing_round else self._get_aggregation_round(context, aggregation_id)
+        global_round_number = aggregation_round.get('global_round_number', 1)
+        
         # Emit aggregation request event
         context.add_event(
             event_type="aggregation-request",
@@ -176,13 +182,13 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 ("workflow_id", workflow_id),
                 ("aggregation_id", aggregation_id),
                 ("node_id", node_id),
-                ("round_number", str(round_number)),
+                ("global_round_number", str(global_round_number)),
                 ("aggregator_node", aggregator_node),
                 ("timestamp", str(int(time.time())))
             ]
         )
         
-        logger.info(f"Aggregation request processed for node {node_id} in round {round_number}")
+        logger.info(f"Aggregation request processed for node {node_id} in global round {global_round_number}")
 
     def _validate_federated_workflow(self, context, workflow_id):
         """Validate that the workflow exists and is configured for federated learning"""
@@ -203,21 +209,20 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             logger.error(f"Error validating federated workflow: {e}")
             return False
 
-    def _get_existing_aggregation_round(self, context, workflow_id, round_number):
-        """Check if an aggregation round already exists for this workflow and round"""
+    def _get_existing_aggregation_round(self, context, workflow_id):
+        """Check if an aggregation round already exists for this workflow (ignore IoT round numbers)"""
         try:
-            # Search for existing aggregation rounds for this workflow and round
-            address_prefix = self._make_aggregation_address_prefix(workflow_id, round_number)
+            # Search for existing aggregation rounds for this workflow that are still collecting
+            address_prefix = self._make_aggregation_address_prefix(workflow_id)
             state_entries = context.get_state([address_prefix])
             
             for entry in state_entries:
                 try:
                     round_data = json.loads(entry.data.decode())
                     if (round_data.get('workflow_id') == workflow_id and 
-                        round_data.get('round_number') == round_number and
                         round_data.get('status') == 'collecting'):
                         
-                        logger.info(f"Found existing aggregation round: {round_data['aggregation_id']}")
+                        logger.info(f"Found existing aggregation round: {round_data['aggregation_id']} (global round {round_data.get('global_round_number', 'unknown')})")
                         return round_data
                 except Exception as e:
                     logger.warning(f"Error parsing aggregation round data: {e}")
@@ -229,7 +234,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             return None
 
     def _create_aggregation_round(self, context, workflow_id, aggregation_id, aggregator_node, 
-                                 round_number, initial_node_id, initial_weights, initial_payload):
+                                 global_round_number, initial_node_id, initial_weights, initial_payload):
         """Create a new aggregation round"""
         try:
             address = self._make_aggregation_address(aggregation_id)
@@ -237,7 +242,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             round_data = {
                 'aggregation_id': aggregation_id,
                 'workflow_id': workflow_id,
-                'round_number': round_number,
+                'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'aggregator_node': aggregator_node,
                 'status': 'collecting',
                 'created_time': time.time(),
@@ -258,7 +263,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 address: json.dumps(round_data).encode()
             })
             
-            logger.info(f"Created aggregation round {aggregation_id} for workflow {workflow_id}")
+            logger.info(f"Created aggregation round {aggregation_id} for workflow {workflow_id} (global round {global_round_number})")
             
         except Exception as e:
             logger.error(f"Error creating aggregation round: {e}")
@@ -308,6 +313,58 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         """Get expected nodes for federated workflow"""
         # For MNIST federated learning, we expect 5 IoT nodes
         return [f"iot-{i}" for i in range(5)]
+
+    def _get_next_global_round_number(self, context, workflow_id):
+        """Get the next global round number for this workflow"""
+        try:
+            # Check for existing global round counter
+            counter_address = self._make_global_round_counter_address(workflow_id)
+            state_entries = context.get_state([counter_address])
+            
+            if state_entries:
+                counter_data = json.loads(state_entries[0].data.decode())
+                current_round = counter_data.get('current_global_round', 0)
+                next_round = current_round + 1
+            else:
+                next_round = 1
+            
+            # Update the global round counter
+            counter_data = {
+                'workflow_id': workflow_id,
+                'current_global_round': next_round,
+                'last_updated': time.time()
+            }
+            
+            context.set_state({
+                counter_address: json.dumps(counter_data).encode()
+            })
+            
+            logger.info(f"Generated global round number {next_round} for workflow {workflow_id}")
+            return next_round
+            
+        except Exception as e:
+            logger.error(f"Error getting next global round number: {e}")
+            return 1  # Fallback to round 1
+
+    def _get_aggregation_round(self, context, aggregation_id):
+        """Get aggregation round data by ID"""
+        try:
+            address = self._make_aggregation_address(aggregation_id)
+            state_entries = context.get_state([address])
+            
+            if state_entries:
+                return json.loads(state_entries[0].data.decode())
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting aggregation round {aggregation_id}: {e}")
+            return None
+
+    @staticmethod
+    def _make_global_round_counter_address(workflow_id):
+        """Generate blockchain address for global round counter"""
+        counter_key = f"{workflow_id}_global_round_counter"
+        return AGGREGATION_NAMESPACE + hashlib.sha512(counter_key.encode()).hexdigest()[:64]
 
     async def _select_aggregator(self):
         """Select aggregator node using deterministic algorithm with consensus"""
@@ -361,9 +418,9 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         return AGGREGATION_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
 
     @staticmethod
-    def _make_aggregation_address_prefix(workflow_id, round_number):
+    def _make_aggregation_address_prefix(workflow_id):
         """Generate address prefix for searching aggregation rounds"""
-        prefix_key = f"{workflow_id}_agg_{round_number}"
+        prefix_key = f"{workflow_id}_agg"
         return AGGREGATION_NAMESPACE + hashlib.sha512(prefix_key.encode()).hexdigest()[:64]
 
     @staticmethod

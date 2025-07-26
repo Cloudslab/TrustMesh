@@ -299,13 +299,14 @@ class TransactionCreator:
         # or Redis for existing federated round information
         return None  # For now, always return None (no existing round found)
 
-    def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=1, metadata=None):
+    def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=None, metadata=None):
         """
         Create and submit aggregation request transaction for federated learning.
         This is the second phase of federated learning where trained model weights are submitted for aggregation.
+        Note: round_number from IoT nodes is ignored - global rounds are managed by the aggregation-request-tp.
         """
         try:
-            logger.info(f"Creating aggregation request for node {node_id}, workflow {workflow_id}, round {round_number}")
+            logger.info(f"Creating aggregation request for node {node_id}, workflow {workflow_id} (IoT round {round_number} ignored)")
             
             timestamp = int(time.time())
             
@@ -313,10 +314,13 @@ class TransactionCreator:
                 "workflow_id": workflow_id,
                 "node_id": node_id,
                 "model_weights": model_weights,
-                "round_number": round_number,
                 "timestamp": timestamp,
                 "metadata": metadata or {}
             }
+            
+            # Only include round_number for backward compatibility, but it will be ignored by the TP
+            if round_number is not None:
+                aggregation_payload["round_number"] = round_number
             
             aggregation_inputs = [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE]
             aggregation_outputs = [AGGREGATION_NAMESPACE]

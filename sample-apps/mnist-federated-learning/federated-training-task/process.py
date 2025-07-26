@@ -2,16 +2,17 @@
 """
 MNIST Federated Learning Training Task
 
-This is the single training application for MNIST federated learning in TrustMesh.
-It receives training data from IoT nodes, performs local training, and returns trained model weights.
+This is a server-based training application for MNIST federated learning in TrustMesh.
+It receives training data and initial model weights from IoT nodes, performs local training,
+and returns the updated model weights.
 """
 
+import asyncio
 import json
 import logging
 import numpy as np
-import os
-import sys
 import time
+import traceback
 from typing import Dict, List, Any, Tuple
 
 # PyTorch for MNIST training
@@ -288,36 +289,105 @@ class MNISTFederatedTrainer:
             raise
 
 
-def main():
-    """Main entry point for the federated training task"""
+async def read_json(reader):
+    """Read JSON data from the stream, similar to cold-chain monitoring pattern"""
+    buffer = b""
+    while True:
+        chunk = await reader.read(4096)
+        if not chunk:
+            raise ValueError("Connection closed before receiving a valid JSON object.")
+        buffer += chunk
+        try:
+            return json.loads(buffer.decode())
+        except json.JSONDecodeError:
+            continue
+
+async def handle_client(reader, writer):
+    """Handle a single client request"""
+    start_time = time.perf_counter()
+    
     try:
-        logger.info("Starting MNIST Federated Learning Training Task")
+        logger.info("New client connected for federated training")
         
-        # Read input data from stdin (TrustMesh standard)
-        input_data = json.loads(sys.stdin.read())
-        logger.info(f"Received input data with keys: {list(input_data.keys())}")
+        # Read JSON input data
+        input_data = await read_json(reader)
+        logger.info(f"Received JSON data with keys: {list(input_data.keys())}")
         
-        # Initialize trainer
+        # Validate required fields - expect data wrapped like cold-chain monitoring
+        if 'data' not in input_data or not isinstance(input_data['data'], list):
+            raise ValueError("'data' field (as a list) is required in the JSON input")
+        
+        # Extract the actual training data from the wrapped structure
+        training_request = input_data['data'][0]  # First item contains the training data
+        
+        # Validate expected fields from IoT node
+        if 'x_train' not in training_request or 'y_train' not in training_request:
+            raise ValueError("'x_train' and 'y_train' fields are required in the training request")
+        if 'initial_weights' not in training_request:
+            raise ValueError("'initial_weights' field is required in the training request")
+        
+        # Restructure to match what process_federated_training expects
+        training_data = {
+            'training_data': {
+                'x_train': training_request['x_train'],
+                'y_train': training_request['y_train']
+            },
+            'initial_weights': training_request['initial_weights'],
+            'node_id': training_request.get('node_id', 'unknown'),
+            'round_number': training_request.get('round_number', 1),
+            'assigned_classes': training_request.get('assigned_classes', []),
+            'samples_count': training_request.get('samples_count', 0)
+        }
+        
+        # Initialize trainer and process request
         trainer = MNISTFederatedTrainer()
+        result = trainer.process_federated_training(training_data)
         
-        # Process federated training
-        result = trainer.process_federated_training(input_data)
+        # Wrap result in the expected format like cold-chain monitoring
+        output = {
+            "data": [result],  # Wrap the training result
+            "total_task_time": input_data.get('total_task_time', 0) + time.perf_counter() - start_time
+        }
         
-        # Output result to stdout (TrustMesh standard)
-        print(json.dumps(result))
-        logger.info("Training task completed successfully")
+        # Send response
+        output_json = json.dumps(output)
+        writer.write(output_json.encode())
+        await writer.drain()
+        
+        logger.info("Federated training completed successfully")
         
     except Exception as e:
-        logger.error(f"Training task failed: {e}")
+        logger.error(f"Federated training failed: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Send error response wrapped in expected format
         error_result = {
-            'error': str(e),
-            'status': 'failed',
-            'trained_weights': None,
-            'training_metrics': None
+            "error": str(e),
+            "status": "failed",
+            "trained_weights": None,
+            "training_metrics": None
         }
-        print(json.dumps(error_result))
-        sys.exit(1)
+        
+        output = {
+            "data": [error_result],
+            "total_task_time": input_data.get('total_task_time', 0) + time.perf_counter() - start_time if 'input_data' in locals() else 0
+        }
+        output_json = json.dumps(output)
+        writer.write(output_json.encode())
+        await writer.drain()
+    
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
+async def main():
+    """Main server entry point"""
+    server = await asyncio.start_server(handle_client, '0.0.0.0', 12345)
+    addr = server.sockets[0].getsockname()
+    logger.info(f'MNIST Federated Training Server serving on {addr}')
+    
+    async with server:
+        await server.serve_forever()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

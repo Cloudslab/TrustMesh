@@ -189,6 +189,35 @@ class MNISTFederatedNode:
                 distribution[f'digit_{digit}'] = count
         return distribution
     
+    def _get_initial_weights_for_round(self, round_number: int) -> Dict:
+        """Get initial weights for the training round"""
+        if round_number == 1:
+            # Round 1: Initialize with random weights
+            logger.info("Round 1: Initializing with random weights")
+            model = MNISTNet(num_classes=10)
+            
+            # Extract weights as nested lists (JSON serializable)
+            initial_weights = {}
+            for name, param in model.state_dict().items():
+                initial_weights[name] = param.cpu().numpy().tolist()
+            
+            # Store for next rounds
+            self.current_weights = initial_weights
+            return initial_weights
+        else:
+            # Round 2+: Use weights from previous aggregation
+            if hasattr(self, 'current_weights') and self.current_weights:
+                logger.info(f"Round {round_number}: Using weights from previous aggregation")
+                return self.current_weights
+            else:
+                # Fallback: random weights if no previous weights available
+                logger.warning(f"Round {round_number}: No previous weights found, using random weights")
+                model = MNISTNet(num_classes=10)
+                initial_weights = {}
+                for name, param in model.state_dict().items():
+                    initial_weights[name] = param.cpu().numpy().tolist()
+                return initial_weights
+    
     def is_coordinator(self) -> bool:
         """Check if this node is the round coordinator"""
         return self.node_index == 0
@@ -212,12 +241,16 @@ class MNISTFederatedNode:
             round_x_data = self.data_partition['x_train'][start_idx:end_idx]
             round_y_data = self.data_partition['y_train'][start_idx:end_idx]
             
+            # Get initial weights for this round
+            initial_weights = self._get_initial_weights_for_round(round_number)
+            
             training_data = {
                 'node_id': self.node_id,
                 'node_index': self.node_index,
                 'round_number': round_number,
                 'x_train': round_x_data,
                 'y_train': round_y_data,
+                'initial_weights': initial_weights,  # Include initial weights
                 'assigned_classes': self.assigned_classes,
                 'samples_count': len(round_x_data),
                 'timestamp': datetime.now().isoformat(),
@@ -406,8 +439,8 @@ class MNISTFederatedNode:
                 
                 # Wait for training to complete and get trained weights
                 logger.info(f"⏳ Waiting for training completion...")
-                trained_weights = await self._wait_for_training_completion(
-                    fed_response_manager, workflow_id, schedule_id, timeout=120  # 2 minutes timeout
+                trained_weights = await fed_response_manager.wait_for_training_completion(
+                    workflow_id, schedule_id, timeout=120  # 2 minutes timeout
                 )
                 
                 if not trained_weights:
@@ -424,9 +457,12 @@ class MNISTFederatedNode:
                 
                 # Wait for aggregated model
                 logger.info(f"⏳ Waiting for aggregated model from round {round_num}...")
-                aggregated_weights = await self._wait_for_aggregated_model(fed_response_manager, workflow_id, round_num, timeout=180)
+                aggregated_weights = await fed_response_manager.wait_for_aggregated_model(workflow_id, round_num, timeout=180)
                 
                 if aggregated_weights:
+                    # Store aggregated weights for next round
+                    self.current_weights = aggregated_weights
+                    
                     # Perform local validation on test data
                     logger.info(f"📊 Performing local validation on test set...")
                     local_accuracy = self.evaluate_model_locally(aggregated_weights)

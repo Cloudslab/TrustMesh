@@ -48,6 +48,10 @@ class FederatedResponseManager:
         self.running = False
         self.aggregated_models = {}
         self.round_history = []
+        
+        # Event-driven coordination
+        self.model_events = {}  # workflow_round -> asyncio.Event
+        self.training_events = {}  # schedule_id -> asyncio.Event
         self.convergence_tracker = {}
         
         # Initialize connections
@@ -230,6 +234,11 @@ class FederatedResponseManager:
             
             logger.info(f"Successfully processed aggregated model for round {round_number}")
             
+            # NEW: Signal event for waiting coroutines
+            if model_key in self.model_events:
+                self.model_events[model_key].set()
+                logger.info(f"Signaled model event for {model_key}")
+            
         except Exception as e:
             logger.error(f"Error handling aggregated model: {e}")
 
@@ -280,6 +289,11 @@ class FederatedResponseManager:
             await self.redis.setex(weights_key, 3600, json.dumps(weights_data))  # 1 hour TTL
             
             logger.info(f"Stored trained weights for {self.node_id} - {workflow_id}")
+            
+            # NEW: Signal event for waiting coroutines
+            if schedule_id in self.training_events:
+                self.training_events[schedule_id].set()
+                logger.info(f"Signaled training event for {schedule_id}")
             
         except Exception as e:
             logger.error(f"Error storing trained weights: {e}")
@@ -380,6 +394,84 @@ class FederatedResponseManager:
     def get_round_history(self) -> List[Dict[str, Any]]:
         """Get history of federated rounds"""
         return self.round_history
+    
+    async def wait_for_aggregated_model(self, workflow_id: str, round_number: int, timeout: int = 180) -> Optional[Dict]:
+        """Wait for aggregated model using event-driven approach instead of polling"""
+        model_key = f"{workflow_id}_round_{round_number}"
+        
+        # Check if model already exists
+        if model_key in self.aggregated_models:
+            logger.info(f"Aggregated model for {model_key} already available")
+            return self.aggregated_models[model_key].get('aggregated_weights', {})
+        
+        # Create event for this model if it doesn't exist
+        if model_key not in self.model_events:
+            self.model_events[model_key] = asyncio.Event()
+            logger.info(f"Created event for {model_key}")
+        
+        try:
+            # Wait for event to be signaled
+            logger.info(f"Waiting for aggregated model event: {model_key} (timeout: {timeout}s)")
+            await asyncio.wait_for(self.model_events[model_key].wait(), timeout=timeout)
+            
+            # Event was signaled, get the model
+            if model_key in self.aggregated_models:
+                logger.info(f"✓ Received aggregated model for {model_key}")
+                
+                # Log model details
+                model_data = self.aggregated_models[model_key]
+                logger.info(f"  Participating nodes: {model_data['participating_nodes']}")
+                logger.info(f"  Aggregator: {model_data['aggregator_node']}")
+                
+                return model_data.get('aggregated_weights', {})
+            else:
+                logger.warning(f"Event signaled but no model found for {model_key}")
+                return None
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout waiting for aggregated model: {model_key}")
+            return None
+        finally:
+            # Clean up event
+            if model_key in self.model_events:
+                del self.model_events[model_key]
+                logger.debug(f"Cleaned up event for {model_key}")
+    
+    async def wait_for_training_completion(self, workflow_id: str, schedule_id: str, timeout: int = 120) -> Optional[Dict]:
+        """Wait for training completion using event-driven approach instead of polling"""
+        # Check if weights already exist
+        weights_data = await self.get_trained_weights_for_aggregation(workflow_id, schedule_id)
+        if weights_data and 'trained_weights' in weights_data:
+            logger.info(f"Training weights for {schedule_id} already available")
+            return weights_data['trained_weights']
+        
+        # Create event for this training if it doesn't exist
+        if schedule_id not in self.training_events:
+            self.training_events[schedule_id] = asyncio.Event()
+            logger.info(f"Created training event for {schedule_id}")
+        
+        try:
+            # Wait for event to be signaled
+            logger.info(f"Waiting for training completion event: {schedule_id} (timeout: {timeout}s)")
+            await asyncio.wait_for(self.training_events[schedule_id].wait(), timeout=timeout)
+            
+            # Event was signaled, get the weights
+            weights_data = await self.get_trained_weights_for_aggregation(workflow_id, schedule_id)
+            if weights_data and 'trained_weights' in weights_data:
+                logger.info(f"✓ Training completed for schedule {schedule_id}")
+                return weights_data['trained_weights']
+            else:
+                logger.warning(f"Event signaled but no weights found for {schedule_id}")
+                return None
+                
+        except asyncio.TimeoutError:
+            logger.error(f"Training timeout for schedule {schedule_id}")
+            return None
+        finally:
+            # Clean up event
+            if schedule_id in self.training_events:
+                del self.training_events[schedule_id]
+                logger.debug(f"Cleaned up training event for {schedule_id}")
 
     async def shutdown(self):
         """Shutdown the federated response manager"""

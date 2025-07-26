@@ -287,7 +287,7 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             'confirmation_time': time.time(),
             'status': 'confirmed',
             'workflow_id': aggregation_data['workflow_id'],
-            'round_number': aggregation_data['round_number']
+            'global_round_number': aggregation_data.get('global_round_number', aggregation_data.get('round_number', 1))  # Use global round
         }
 
         context.set_state({
@@ -297,14 +297,15 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
         # Update aggregation request status
         self._update_aggregation_status(context, aggregation_id, 'confirmed')
 
-        # Emit confirmation event
+        # Emit confirmation event using global round number
+        global_round_number = aggregation_data.get('global_round_number', aggregation_data.get('round_number', 1))
         context.add_event(
             event_type="aggregation-confirmation",
             attributes=[
                 ("aggregation_id", aggregation_id),
                 ("aggregator_node", aggregator_node),
                 ("workflow_id", aggregation_data['workflow_id']),
-                ("round_number", str(aggregation_data['round_number'])),
+                ("global_round_number", str(global_round_number)),
                 ("participating_nodes", json.dumps(participating_nodes)),
                 ("validation_score", str(validation_result['validation_score'])),
                 ("status", "confirmed")
