@@ -10,26 +10,13 @@ import json
 import logging
 import numpy as np
 import os
-import ssl
-import tempfile
 import time
 import zmq
 import zmq.asyncio
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-from coredis import RedisCluster
-from coredis.exceptions import RedisError
-
-# Redis configuration
-REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
-REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
-REDIS_SSL_CERT = os.getenv('REDIS_SSL_CERT')
-REDIS_SSL_KEY = os.getenv('REDIS_SSL_KEY')
-REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
-
-# ZMQ configuration
+# ZMQ configuration for receiving aggregated models from compute nodes
 ZMQ_RESPONSE_PORT = int(os.getenv('ZMQ_RESPONSE_PORT', '5555'))
 
 logger = logging.getLogger(__name__)
@@ -43,7 +30,6 @@ class FederatedResponseManager:
     
     def __init__(self, node_id: str):
         self.node_id = node_id
-        self.redis = None
         self.zmq_context = None
         self.zmq_socket = None
         self.running = False
@@ -55,71 +41,15 @@ class FederatedResponseManager:
         self.training_events = {}  # schedule_id -> asyncio.Event
         self.convergence_tracker = {}
         
-        # Initialize connections
-        self._initialize_redis()
+        # Local storage for trained weights (instead of Redis)
+        self.trained_weights_storage = {}
+        
+        # Initialize ZMQ connection for receiving models
         self._initialize_zmq()
         
         logger.info(f"Initialized FederatedResponseManager for node {node_id}")
 
-    def _initialize_redis(self):
-        """Initialize Redis connection"""
-        logger.info("Starting Redis initialization for federated response manager")
-        temp_files = []
-        try:
-            ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
-            ssl_context.maximum_version = ssl.TLSVersion.TLSv1_3
-
-            if REDIS_SSL_CA:
-                ca_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
-                ca_file.write(REDIS_SSL_CA)
-                ca_file.flush()
-                temp_files.append(ca_file.name)
-                ssl_context.load_verify_locations(cafile=ca_file.name)
-
-            if REDIS_SSL_CERT and REDIS_SSL_KEY:
-                cert_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.crt')
-                key_file = tempfile.NamedTemporaryFile(delete=False, mode='w+', suffix='.key')
-                cert_file.write(REDIS_SSL_CERT)
-                key_file.write(REDIS_SSL_KEY)
-                cert_file.flush()
-                key_file.flush()
-                temp_files.extend([cert_file.name, key_file.name])
-                ssl_context.load_cert_chain(
-                    certfile=cert_file.name,
-                    keyfile=key_file.name
-                )
-
-            logger.info(f"Attempting to connect to Redis cluster at {REDIS_HOST}:{REDIS_PORT}")
-
-            self.redis = RedisCluster(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                password=REDIS_PASSWORD,
-                ssl=True,
-                ssl_context=ssl_context,
-                decode_responses=True
-            )
-
-            # Test connection
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.redis.ping())
-            loop.close()
-            
-            logger.info("Connected to Redis cluster successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {str(e)}")
-            raise
-        finally:
-            for file_path in temp_files:
-                try:
-                    os.unlink(file_path)
-                except Exception as e:
-                    logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+    # Redis not needed for IoT nodes - they only receive models via ZMQ
 
     def _initialize_zmq(self):
         """Initialize ZMQ socket for receiving responses"""
@@ -359,16 +289,15 @@ class FederatedResponseManager:
             if metadata:
                 logger.info(f"   • Training metadata: {metadata}")
             
-            # Store in Redis for later retrieval
-            logger.info(f"   • Storing in Redis with key: {weights_key}")
-            logger.info(f"   • TTL: 3600 seconds (1 hour)")
+            # Store in local memory for later retrieval
+            logger.info(f"   • Storing locally with key: {weights_key}")
             
-            await self.redis.setex(weights_key, 3600, json.dumps(weights_data))
+            self.trained_weights_storage[weights_key] = weights_data
             
             storage_duration = time.time() - storage_start_time
             logger.info(f"✅ TRAINED WEIGHTS STORED SUCCESSFULLY")
             logger.info(f"   • Storage duration: {storage_duration:.3f}s")
-            logger.info(f"   • Redis key: {weights_key}")
+            logger.info(f"   • Storage key: {weights_key}")
             
             # Signal event for waiting coroutines
             if schedule_id in self.training_events:
@@ -414,10 +343,10 @@ class FederatedResponseManager:
         """Retrieve trained weights for aggregation request"""
         try:
             weights_key = f"trained_weights_{self.node_id}_{workflow_id}_{schedule_id}"
-            weights_data = await self.redis.get(weights_key)
+            weights_data = self.trained_weights_storage.get(weights_key)
             
             if weights_data:
-                return json.loads(weights_data)
+                return weights_data
             return None
             
         except Exception as e:
