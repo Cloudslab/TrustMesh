@@ -1,8 +1,9 @@
-FROM python:3.8-slim
+# Multi-stage build to reduce final image size
+FROM python:3.8-slim as builder
 
 WORKDIR /app
 
-# Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -10,7 +11,20 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -f https://download.pytorch.org/whl/torch_stable.html
+
+# Final stage with minimal image
+FROM python:3.8-slim
+
+WORKDIR /app
+
+# Copy only the installed packages from builder
+COPY --from=builder /usr/local/lib/python3.8/site-packages /usr/local/lib/python3.8/site-packages
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy application code
 COPY process.py .

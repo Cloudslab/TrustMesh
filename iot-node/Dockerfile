@@ -28,7 +28,7 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install packages from requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -f https://download.pytorch.org/whl/torch_stable.html
 
 # Copy the client script
 COPY transaction_initiator/* ./transaction_initiator/

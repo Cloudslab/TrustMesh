@@ -31,6 +31,16 @@ kubectl delete secret redis-password --ignore-not-found=true
 echo "Deleting persistent volume claims..."
 kubectl delete pvc -l app=redis-cluster --ignore-not-found=true
 kubectl delete pvc -l app=couchdb-cluster --ignore-not-found=true
+# Delete all remaining PVCs
+kubectl delete pvc --all --ignore-not-found=true
+
+# Delete persistent volumes
+echo "Deleting persistent volumes..."
+kubectl delete pv --all --ignore-not-found=true
+
+# Delete storage classes (if any custom ones exist)
+echo "Deleting custom storage classes..."
+kubectl delete storageclass -l project=trustmesh --ignore-not-found=true
 
 # Clean up any remaining pods, services, etc.
 echo "Cleaning up remaining TrustMesh resources..."
