@@ -96,7 +96,11 @@ def initialize_redis():
             decode_responses=True
         )
 
-        asyncio.get_event_loop().run_until_complete(redis_instance.ping())
+        # Test connection synchronously 
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(redis_instance.ping())
+        loop.close()
         logger.info("Connected to Redis cluster successfully")
 
         return redis_instance
