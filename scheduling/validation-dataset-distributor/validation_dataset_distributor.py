@@ -133,7 +133,7 @@ class MNISTValidationDatasetDistributor:
             
             # Load MNIST test dataset (we'll use this as our validation set)
             transform = transforms.Compose([transforms.ToTensor()])
-            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=True, transform=transform)
+            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=False, transform=transform)
             
             # Convert to numpy arrays for compatibility with existing code
             x_test = test_dataset.data.numpy()

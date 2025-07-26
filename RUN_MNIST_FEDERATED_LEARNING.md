@@ -36,6 +36,8 @@ Each node splits its data: **80% training, 20% local test** for convergence dete
 
 ✅ **Privacy Preserving**: Training data never leaves nodes, only model weights are shared
 
+✅ **Offline-Ready**: MNIST dataset pre-downloaded in Docker images - no internet access required at runtime
+
 ## Prerequisites
 
 ### System Requirements
@@ -476,11 +478,24 @@ kubectl logs pbft-0 -c aggregation-confirmation-tp | grep "MNIST validation"
 
 ### 7.4 Common Issues and Solutions
 
+**Issue**: MNIST dataset download fails with "Temporary failure in name resolution"
+```bash
+# This occurs when pods don't have internet access to download datasets
+# Solution: The Docker images now pre-download MNIST during build
+# If you encounter this error, rebuild the images:
+cd TrustMesh
+./build-project.sh  # This rebuilds all images with pre-downloaded MNIST
+./build-and-deploy-network.sh  # Redeploy with updated images
+```
+
 **Issue**: Validation dataset not found
 ```bash
 # Solution: Check if validation job completed
 kubectl get jobs
 kubectl logs job/mnist-validation-dataset-distributor
+
+# If the job failed due to network issues, it's likely the same MNIST download problem
+# The updated validation-dataset-distributor image also pre-downloads MNIST
 ```
 
 **Issue**: Aggregation timeout

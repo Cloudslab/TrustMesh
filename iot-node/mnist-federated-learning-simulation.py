@@ -113,10 +113,10 @@ class MNISTFederatedNode:
     def _load_data_partition(self):
         """Load MNIST data partition for this node"""
         try:
-            # Load MNIST dataset using torchvision
+            # Load MNIST dataset using torchvision (pre-downloaded in container)
             transform = transforms.Compose([transforms.ToTensor()])
-            train_dataset = datasets.MNIST(root='/tmp/mnist', train=True, download=True, transform=transform)
-            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=True, transform=transform)
+            train_dataset = datasets.MNIST(root='/tmp/mnist', train=True, download=False, transform=transform)
+            test_dataset = datasets.MNIST(root='/tmp/mnist', train=False, download=False, transform=transform)
             
             # Convert to numpy arrays for compatibility
             x_train = train_dataset.data.numpy()
