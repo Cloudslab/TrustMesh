@@ -96,11 +96,7 @@ def initialize_redis():
             decode_responses=True
         )
 
-        # Test connection synchronously 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(redis_instance.ping())
-        loop.close()
+        asyncio.get_event_loop().run_until_complete(redis_instance.ping())
         logger.info("Connected to Redis cluster successfully")
 
         return redis_instance
@@ -191,14 +187,6 @@ def generate_schedule(workflow_id, schedule_id, source_url, source_public_key):
 
     except Exception as e:
         logger.error(f"Error generating schedule: {str(e)}")
-
-
-
-
-
-
-
-
 
 
 def publish_schedule(schedule_id, schedule, workflow_id, source_url, source_public_key):
@@ -373,202 +361,6 @@ def process_future_result(future_result):
         }
 
 
-def start_federated_events_listener():
-    """Start listening for federated events from Redis"""
-    try:
-        logger.info("Starting federated events listener")
-        # Use asyncio.run() to properly handle the event loop
-        asyncio.run(listen_for_federated_events())
-    except Exception as e:
-        logger.error(f"Error in federated events listener: {e}")
-
-
-async def listen_for_federated_events():
-    """Listen for federated_events Redis channel"""
-    try:
-        # Use the existing global Redis connection for pub/sub
-        pubsub = redis.pubsub()
-        
-        logger.info("Subscribing to federated_events Redis channel")
-        await pubsub.subscribe('federated_events')
-        
-        logger.info("Federated events listener active, waiting for messages...")
-        
-        async for message in pubsub.listen():
-            if message['type'] == 'message':
-                try:
-                    event_data = json.loads(message['data'])
-                    await handle_federated_redis_event(event_data)
-                except Exception as e:
-                    logger.error(f"Error processing federated event: {e}")
-                    
-    except Exception as e:
-        logger.error(f"Error in federated events listener: {e}")
-
-
-async def handle_federated_redis_event(event_data):
-    """Handle federated events received from Redis"""
-    try:
-        event_type = event_data.get('event_type')
-        
-        if event_type == 'federated_data_ready':
-            workflow_id = event_data.get('workflow_id')
-            schedule_id = event_data.get('schedule_id')
-            app_id = event_data.get('app_id')
-            
-            logger.info(f"Received federated_data_ready event for workflow {workflow_id}, schedule {schedule_id}")
-            
-            # Process federated data ready event
-            await handle_federated_data_ready(workflow_id, schedule_id, app_id)
-            
-        else:
-            logger.info(f"Received unknown federated event type: {event_type}")
-            
-    except Exception as e:
-        logger.error(f"Error handling federated Redis event: {e}")
-
-
-async def handle_federated_data_ready(workflow_id, schedule_id, app_id):
-    """Handle federated data ready event - trigger task execution"""
-    max_retries = 3
-    retry_delay = 2.0
-    
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Processing federated data ready (attempt {attempt + 1}): workflow={workflow_id}, schedule={schedule_id}, app={app_id}")
-            
-            # Check if we have a federated schedule for this workflow with timeout
-            federated_key = f"federated_schedule_{schedule_id}"
-            
-            # Use timeout-protected Redis operations
-            schedule_data = await asyncio.wait_for(
-                redis.get(federated_key), 
-                timeout=15.0
-            )
-            
-            if schedule_data:
-                logger.info(f"Found federated schedule for {schedule_id}, data aggregation complete")
-                
-                # Parse and validate schedule data
-                try:
-                    schedule_obj = json.loads(schedule_data)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Invalid JSON in federated schedule {schedule_id}: {e}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    raise
-                
-                # Update schedule status to indicate federated data is ready
-                schedule_obj['federated_data_status'] = 'ready'
-                schedule_obj['federated_data_timestamp'] = time.time()
-                schedule_obj['processing_attempt'] = attempt + 1
-                
-                # Validate critical fields
-                if not schedule_obj.get('schedule_id') or not schedule_obj.get('workflow_id'):
-                    logger.error(f"Missing critical fields in schedule {schedule_id}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(retry_delay)
-                        continue
-                    raise ValueError("Missing critical schedule fields")
-                
-                # Update both standard and federated keys with timeout protection
-                updated_data = json.dumps(schedule_obj)
-                
-                # Atomic update operations
-                await asyncio.gather(
-                    asyncio.wait_for(redis.set(f"schedule_{schedule_id}", updated_data), timeout=10.0),
-                    asyncio.wait_for(redis.set(federated_key, updated_data), timeout=10.0)
-                )
-                
-                # Publish updated schedule to trigger task execution
-                await asyncio.wait_for(
-                    redis.publish('schedule', updated_data), 
-                    timeout=10.0
-                )
-                
-                logger.info(f"Successfully updated federated schedule {schedule_id} with data ready status")
-                return  # Success, exit retry loop
-                
-            else:
-                logger.warning(f"No federated schedule found for {schedule_id} (attempt {attempt + 1})")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                    continue
-                else:
-                    # Final attempt failed, create error record
-                    error_key = f"fed_schedule_error_{schedule_id}"
-                    error_data = {
-                        'error': 'schedule_not_found',
-                        'workflow_id': workflow_id,
-                        'schedule_id': schedule_id,
-                        'app_id': app_id,
-                        'timestamp': time.time(),
-                        'attempts': max_retries
-                    }
-                    await redis.setex(error_key, 3600, json.dumps(error_data))
-                    raise ValueError(f"No federated schedule found after {max_retries} attempts")
-            
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout handling federated data ready (attempt {attempt + 1})")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-                continue
-            else:
-                await _handle_federated_processing_error(workflow_id, schedule_id, app_id, "timeout_error")
-                raise
-                
-        except Exception as e:
-            logger.error(f"Error handling federated data ready (attempt {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-                continue
-            else:
-                await _handle_federated_processing_error(workflow_id, schedule_id, app_id, str(e))
-                raise
-
-
-async def _handle_federated_processing_error(workflow_id, schedule_id, app_id, error_message):
-    """Handle errors in federated processing with monitoring and cleanup"""
-    try:
-        logger.error(f"Federated processing failed for {workflow_id}:{schedule_id} - {error_message}")
-        
-        # Store comprehensive error information
-        error_key = f"fed_processing_error_{workflow_id}_{schedule_id}"
-        error_data = {
-            'workflow_id': workflow_id,
-            'schedule_id': schedule_id,
-            'app_id': app_id,
-            'error_message': error_message,
-            'error_time': time.time(),
-            'component': 'schedule_event_handler',
-            'severity': 'high'
-        }
-        
-        await redis.setex(error_key, 7200, json.dumps(error_data))  # 2 hour retention
-        
-        # Publish error event for monitoring systems
-        error_event = {
-            'event_type': 'federated_processing_error',
-            'workflow_id': workflow_id,
-            'schedule_id': schedule_id,
-            'app_id': app_id,
-            'error_message': error_message,
-            'timestamp': time.time(),
-            'component': 'schedule_event_handler'
-        }
-        
-        await redis.publish('federated_events', json.dumps(error_event))
-        await redis.publish('error_events', json.dumps(error_event))
-        
-        logger.info(f"Published federated processing error event for monitoring")
-        
-    except Exception as secondary_error:
-        logger.critical(f"Critical error in federated error handler: {secondary_error}")
-
-
-
-
 def main():
     logger.info("Starting Schedule Generation Event Handler")
 
@@ -601,12 +393,6 @@ def main():
         return
 
     logger.info("Schedule Generation Handler: Subscription successful. Listening for events...")
-
-    # Start Redis federated events listener in background
-    import threading
-    federated_thread = threading.Thread(target=start_federated_events_listener, daemon=True)
-    federated_thread.start()
-    logger.info("Started federated events listener thread")
 
     while True:
         try:
