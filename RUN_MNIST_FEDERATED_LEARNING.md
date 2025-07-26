@@ -248,7 +248,7 @@ echo "Application deployed successfully"
 kubectl exec -it deployment/network-management-console -c workflow-creation-client -- bash
 
 # Create the federated workflow
-python dependency_graph_client.py create_workflow federated_dependency_graph.json
+python workflow_creation_client.py federated_dependency_graph.json
 
 # Note the returned workflow ID (e.g., workflow_12345)
 ```
@@ -262,61 +262,119 @@ The `federated_dependency_graph.json` now contains:
 
 ### 5.1 Start IoT Nodes (Each Node Independently)
 
-On each IoT node, run the federated learning simulation:
+On each IoT node, run the federated learning simulation. The script now **auto-detects the node ID** from the hostname by default and uses consistent parameter formatting:
 
 **IoT Node 0 (iot-node-1):**
 ```bash
 kubectl exec -it iot-0-xxxxx -- bash
 cd /app
-python mnist-federated-learning-simulation.py workflow_12345 --node-id iot-0 --max-rounds 5
+python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --max-rounds 5
 ```
 
 **IoT Node 1 (iot-node-2):**
 ```bash
 kubectl exec -it iot-1-xxxxx -- bash
 cd /app
-python mnist-federated-learning-simulation.py workflow_12345 --node-id iot-1 --max-rounds 5
+python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --max-rounds 5
 ```
 
 **Continue for nodes iot-2, iot-3, iot-4...**
+
+> **Note**: The script automatically detects the node ID from the hostname (iot-0, iot-1, etc.). You can override this with `--node-id` if needed:
+> ```bash
+> python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --max-rounds 5 --node-id custom-node-name
+> ```
 
 ### 5.2 Monitor Federated Learning Progress
 
 Each node will show:
 
 ```bash
-############################################################
-# Starting Two-Phase MNIST Federated Learning
-############################################################
-# Node: iot-0
-# Workflow: workflow_12345
-# Max Rounds: 5
-# Federated Extension: Available
-############################################################
+================================================================================
+🤖 MNIST FEDERATED LEARNING NODE
+================================================================================
+🏷️  Node ID: iot-0
+🔄 Workflow ID: workflow_12345
+🔢 Max Rounds: 5
+🔌 Federated Extension: Available
+🕰️ Start Time: 2024-01-15 14:30:25
+================================================================================
 
-🔄 Starting Round 1/5
+################################################################################
+🎆 FEDERATED LEARNING SESSION STARTED
+################################################################################
+📱 Node Information:
+   • Node ID: iot-0
+   • Node Index: 0
+   • Assigned Classes: [0, 1]
+   • Training Samples: 800
+   • Test Samples: 200
+🔄 Session Configuration:
+   • Workflow ID: workflow_12345
+   • Maximum Rounds: 5
+   • Federated Extension: Available
+   • Start Time: 2024-01-15T14:30:25.123456
+################################################################################
 
-📊 Phase 1: Training Phase
-Training on 800 samples from classes [0, 1]
-✓ Training completed - received trained weights
+================================================================================
+🔥 FEDERATED LEARNING ROUND 1/5 STARTED
+================================================================================
+🟦 PHASE 1: TRAINING PHASE
+   • Objective: Submit training data to TrustMesh for processing
+   • Expected outcome: Receive trained model weights
 
-🔗 Phase 2: Aggregation Phase  
-✓ Submitted trained weights for aggregation
+✅ TRAINING PHASE COMPLETED SUCCESSFULLY
+   • Schedule ID: schedule_abc123
+   • Training samples: 500
+   • Assigned classes: [0, 1]
+   • Total phase duration: 45.2s
 
-⏳ Waiting for aggregated model from round 1...
-✓ Received aggregated model for round 1
-  Participating nodes: ['iot-0', 'iot-1', 'iot-2']
-  Aggregator: compute-node-1
+🟨 PHASE 2: AGGREGATION PHASE
+   • Objective: Submit trained weights for global aggregation
+   • Expected outcome: Contribute to FedAvg aggregation process
 
-📊 Performing local validation on test set...
-Local validation - Accuracy: 0.8450, Loss: 0.4123 on 200 samples
-Local accuracy improved to 0.845
+✅ AGGREGATION SUBMISSION SUCCESSFUL
+   • Weights submitted to aggregation-request-tp
+   • Now waiting for global model aggregation...
 
-🔄 Starting Round 2/5
+⏳ WAITING FOR GLOBAL MODEL AGGREGATION
+✅ GLOBAL MODEL RECEIVED SUCCESSFULLY
+   • Aggregation wait duration: 180.1s
+   • Aggregated weights: 8 layers
+   • Model ready for local validation
+
+📊 LOCAL VALIDATION PHASE
+✅ LOCAL VALIDATION COMPLETED
+   • Validation duration: 2.34s
+   • Local accuracy: 0.8450 (84.50%)
+   • Per-class accuracies:
+     - class_0: 0.8200 (82.00%)
+     - class_1: 0.8700 (87.00%)
 ...
 ```
 
-### 5.3 Time-Windowed Aggregation in Action
+### 5.3 Enhanced Logging Features
+
+The updated script provides **comprehensive logging** with visual indicators and structured information:
+
+**🎯 Event-Driven Logging**: Every major event is logged with timestamps, durations, and detailed context
+- Training phase submission and completion
+- Aggregation phase with weight analysis  
+- Global model reception with participation details
+- Local validation with per-class accuracy breakdowns
+
+**📊 Performance Monitoring**: Detailed timing and performance metrics
+- Phase durations and wait times
+- Model parameter counts and layer information
+- Network communication latency
+- Training data distribution analysis
+
+**🚨 Error Handling**: Clear error messages with troubleshooting context
+- Timeout scenarios with possible causes
+- Missing data or connection issues
+- Validation failures with specific reasons
+
+### 5.4 Time-Windowed Aggregation in Action
 
 You'll observe:
 - **Independent participation**: Nodes join rounds independently
@@ -329,9 +387,55 @@ Example scenario:
 - **Round 2**: iot-0, iot-3, iot-4 submit → Aggregation with different 3 nodes  
 - **Round 3**: iot-1 converged locally → Only iot-0, iot-2, iot-3, iot-4 continue
 
-## Step 6: Monitor and Troubleshoot
+## Step 6: Script Parameters and Options
 
-### 6.1 Monitor Aggregation Process
+### 6.1 Available Parameters
+
+The MNIST federated learning script supports the following parameters:
+
+```bash
+python mnist-federated-learning-simulation.py [OPTIONS]
+
+Required:
+  --workflow-id TEXT    Workflow ID for the federated learning experiment
+
+Optional:
+  --max-rounds INTEGER  Maximum number of federated rounds (default: 5)
+  --node-id TEXT       Node ID override (by default auto-detects from hostname)
+  --help               Show help message and exit
+```
+
+### 6.2 Auto-Detection Features
+
+**Hostname Detection**: The script automatically detects the node ID from the Kubernetes pod hostname:
+- `iot-0-xxxxx` → `iot-0`
+- `iot-1-xxxxx` → `iot-1`
+- etc.
+
+**Environment Variables**: Falls back to checking `IOT_NODE_ID` environment variable if hostname detection fails.
+
+**Manual Override**: Use `--node-id` parameter to specify a custom node identifier if needed.
+
+### 6.3 Usage Examples
+
+**Standard usage (recommended):**
+```bash
+python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --max-rounds 5
+```
+
+**Custom node ID:**
+```bash
+python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --node-id custom-node --max-rounds 3
+```
+
+**Quick test run:**
+```bash
+python mnist-federated-learning-simulation.py --workflow-id workflow_12345 --max-rounds 2
+```
+
+## Step 7: Monitor and Troubleshoot
+
+### 7.1 Monitor Aggregation Process
 
 ```bash
 # Check aggregation requests in blockchain
@@ -344,18 +448,22 @@ kubectl logs pbft-0 -c aggregation-confirmation-tp -f
 kubectl exec -it redis-0 -- redis-cli monitor
 ```
 
-### 6.2 Check Convergence Status
+### 7.2 Check Convergence Status
 
 Each node logs its convergence independently:
 ```bash
-Local accuracy improved to 0.892
-No improvement for 1 rounds
-No improvement for 2 rounds  
-No improvement for 3 rounds
-🛑 Convergence detected for workflow_12345 based on local validation - stopping participation
+📈 Final Convergence Status:
+   • rounds_without_improvement: 3
+   • best_accuracy: 0.892
+   • current_accuracy: 0.892
+   • should_continue: False
+
+🏁 CONVERGENCE DETECTED AFTER ROUND 4
+   • Based on local validation performance
+   • Stopping federated learning session
 ```
 
-### 6.3 Verify Blockchain Consensus
+### 7.3 Verify Blockchain Consensus
 
 The blockchain performs deterministic validation:
 ```bash
@@ -366,7 +474,7 @@ kubectl logs pbft-0 -c aggregation-confirmation-tp | grep "MNIST validation"
 # Blockchain consensus validation score: 0.893
 ```
 
-### 6.4 Common Issues and Solutions
+### 7.4 Common Issues and Solutions
 
 **Issue**: Validation dataset not found
 ```bash
@@ -387,9 +495,9 @@ kubectl logs job/mnist-validation-dataset-distributor
 kubectl exec -it iot-0-xxxxx -- netstat -tulpn | grep :5555
 ```
 
-## Step 7: Results and Analysis
+## Step 8: Results and Analysis
 
-### 7.1 Expected Outcomes
+### 8.1 Expected Outcomes
 
 **Successful federated learning will show:**
 - Each node trains on its specific digit classes (0-1, 2-3, 4-5, 6-7, 8-9)
@@ -406,7 +514,7 @@ Round 4: Local=0.89, Blockchain=0.89 (no improvement)
 Round 5: Convergence detected - stopping
 ```
 
-### 7.2 Performance Characteristics
+### 8.2 Performance Characteristics
 
 - **Time per round**: ~2-3 minutes (including 3-minute aggregation window)
 - **Network overhead**: Only model weights transmitted (not data)

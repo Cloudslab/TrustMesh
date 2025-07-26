@@ -8,6 +8,7 @@ and manages the two-phase federated learning flow for IoT nodes.
 import asyncio
 import json
 import logging
+import numpy as np
 import os
 import ssl
 import tempfile
@@ -192,22 +193,55 @@ class FederatedResponseManager:
 
     async def _handle_aggregated_model(self, model_data: Dict[str, Any]):
         """Handle received aggregated model"""
+        receive_time = time.time()
+        
         try:
-            logger.info(f"Received aggregated model for node {self.node_id}")
+            logger.info(f"📨 AGGREGATED MODEL RECEIVED")
+            logger.info(f"   • Recipient node: {self.node_id}")
+            logger.info(f"   • Received at: {time.strftime('%H:%M:%S', time.localtime(receive_time))}")
             
+            # Extract model data
             workflow_id = model_data.get('workflow_id')
             round_number = model_data.get('round_number')
             aggregated_weights = model_data.get('aggregated_weights')
             participating_nodes = model_data.get('participating_nodes', [])
             aggregator_node = model_data.get('aggregator_node')
+            validation_metrics = model_data.get('validation_metrics', {})
             
+            logger.info(f"📊 MODEL METADATA:")
+            logger.info(f"   • Workflow ID: {workflow_id}")
+            logger.info(f"   • Round number: {round_number}")
+            logger.info(f"   • Aggregator node: {aggregator_node}")
+            logger.info(f"   • Participating nodes: {participating_nodes} ({len(participating_nodes)} total)")
+            
+            # Validate required fields
             if not all([workflow_id, round_number is not None, aggregated_weights]):
-                logger.error("Invalid aggregated model data received")
+                logger.error(f"❌ INVALID MODEL DATA")
+                logger.error(f"   • Missing required fields: workflow_id={bool(workflow_id)}, round_number={bool(round_number is not None)}, weights={bool(aggregated_weights)}")
                 return
             
-            logger.info(f"Processing aggregated model - Workflow: {workflow_id}, Round: {round_number}")
-            logger.info(f"Participating nodes: {participating_nodes}")
-            logger.info(f"Aggregator node: {aggregator_node}")
+            # Log validation metrics if available
+            if validation_metrics:
+                logger.info(f"🔍 VALIDATION METRICS:")
+                for key, value in validation_metrics.items():
+                    if isinstance(value, float):
+                        logger.info(f"   • {key}: {value:.4f}")
+                    else:
+                        logger.info(f"   • {key}: {value}")
+            
+            # Log weight information
+            if aggregated_weights:
+                weight_layers = len(aggregated_weights)
+                total_params = 0
+                for layer_name, weights in aggregated_weights.items():
+                    if isinstance(weights, list):
+                        layer_params = len(np.array(weights).flatten())
+                        total_params += layer_params
+                
+                logger.info(f"📊 AGGREGATED WEIGHTS:")
+                logger.info(f"   • Weight layers: {weight_layers}")
+                logger.info(f"   • Total parameters: {total_params:,}")
+                logger.info(f"   • Layer names: {list(aggregated_weights.keys())[:3]}... (showing first 3)")
             
             # Store aggregated model
             model_key = f"{workflow_id}_round_{round_number}"
@@ -217,10 +251,14 @@ class FederatedResponseManager:
                 'aggregated_weights': aggregated_weights,
                 'participating_nodes': participating_nodes,
                 'aggregator_node': aggregator_node,
-                'received_time': time.time()
+                'received_time': receive_time,
+                'validation_metrics': validation_metrics
             }
             
+            logger.info(f"💾 MODEL STORED: Cached with key {model_key}")
+            
             # Evaluate model and update convergence tracking
+            logger.info(f"📈 CONVERGENCE TRACKING: Updating convergence status")
             await self._evaluate_and_track_convergence(workflow_id, round_number, aggregated_weights)
             
             # Store round history
@@ -228,19 +266,27 @@ class FederatedResponseManager:
                 'workflow_id': workflow_id,
                 'round_number': round_number,
                 'node_id': self.node_id,
-                'received_time': time.time(),
-                'participating_nodes': participating_nodes
+                'received_time': receive_time,
+                'participating_nodes': participating_nodes,
+                'aggregator_node': aggregator_node
             })
             
-            logger.info(f"Successfully processed aggregated model for round {round_number}")
+            logger.info(f"📋 HISTORY UPDATED: Round added to participation history")
             
-            # NEW: Signal event for waiting coroutines
+            # Signal event for waiting coroutines
             if model_key in self.model_events:
                 self.model_events[model_key].set()
-                logger.info(f"Signaled model event for {model_key}")
+                logger.info(f"🚨 EVENT SIGNALED: Notified waiting coroutines for {model_key}")
+            else:
+                logger.info(f"🔕 NO WAITERS: No active event listeners for {model_key}")
+            
+            logger.info(f"✅ AGGREGATED MODEL PROCESSING COMPLETED")
             
         except Exception as e:
-            logger.error(f"Error handling aggregated model: {e}")
+            logger.error(f"❌ ERROR HANDLING AGGREGATED MODEL")
+            logger.error(f"   • Error: {str(e)}")
+            logger.error(f"   • Node: {self.node_id}")
+            logger.error(f"   • Model data keys: {list(model_data.keys()) if isinstance(model_data, dict) else 'Not a dict'}")
 
     async def _process_compute_response(self, response_data: Dict[str, Any]):
         """Process responses from compute nodes (training results)"""
@@ -273,9 +319,32 @@ class FederatedResponseManager:
     async def _store_trained_weights(self, workflow_id: str, schedule_id: str, 
                                    trained_weights: Dict, result_data: Dict):
         """Store trained weights for later aggregation request"""
+        storage_start_time = time.time()
+        
         try:
+            logger.info(f"💾 STORING TRAINED WEIGHTS")
+            logger.info(f"   • Node: {self.node_id}")
+            logger.info(f"   • Workflow: {workflow_id}")
+            logger.info(f"   • Schedule ID: {schedule_id}")
+            
             weights_key = f"trained_weights_{self.node_id}_{workflow_id}_{schedule_id}"
             
+            # Log weight information
+            if trained_weights:
+                weight_layers = len(trained_weights)
+                total_params = 0
+                for layer_name, weights in trained_weights.items():
+                    if isinstance(weights, list):
+                        layer_params = len(np.array(weights).flatten())
+                        total_params += layer_params
+                
+                logger.info(f"   • Weight layers: {weight_layers}")
+                logger.info(f"   • Total parameters: {total_params:,}")
+                logger.info(f"   • Layer names: {list(trained_weights.keys())[:3]}... (showing first 3)")
+            else:
+                logger.warning(f"   • No trained weights to store (empty or None)")
+            
+            # Prepare storage data
             weights_data = {
                 'node_id': self.node_id,
                 'workflow_id': workflow_id,
@@ -285,18 +354,36 @@ class FederatedResponseManager:
                 'training_completed_time': time.time()
             }
             
+            # Log metadata if available
+            metadata = result_data.get('metadata', {})
+            if metadata:
+                logger.info(f"   • Training metadata: {metadata}")
+            
             # Store in Redis for later retrieval
-            await self.redis.setex(weights_key, 3600, json.dumps(weights_data))  # 1 hour TTL
+            logger.info(f"   • Storing in Redis with key: {weights_key}")
+            logger.info(f"   • TTL: 3600 seconds (1 hour)")
             
-            logger.info(f"Stored trained weights for {self.node_id} - {workflow_id}")
+            await self.redis.setex(weights_key, 3600, json.dumps(weights_data))
             
-            # NEW: Signal event for waiting coroutines
+            storage_duration = time.time() - storage_start_time
+            logger.info(f"✅ TRAINED WEIGHTS STORED SUCCESSFULLY")
+            logger.info(f"   • Storage duration: {storage_duration:.3f}s")
+            logger.info(f"   • Redis key: {weights_key}")
+            
+            # Signal event for waiting coroutines
             if schedule_id in self.training_events:
                 self.training_events[schedule_id].set()
-                logger.info(f"Signaled training event for {schedule_id}")
+                logger.info(f"🚨 EVENT SIGNALED: Notified waiting coroutines for {schedule_id}")
+            else:
+                logger.info(f"🔕 NO WAITERS: No active event listeners for {schedule_id}")
             
         except Exception as e:
-            logger.error(f"Error storing trained weights: {e}")
+            storage_duration = time.time() - storage_start_time
+            logger.error(f"❌ ERROR STORING TRAINED WEIGHTS")
+            logger.error(f"   • Error: {str(e)}")
+            logger.error(f"   • Node: {self.node_id}")
+            logger.error(f"   • Schedule ID: {schedule_id}")
+            logger.error(f"   • Duration before failure: {storage_duration:.3f}s")
 
     async def _evaluate_and_track_convergence(self, workflow_id: str, round_number: int, 
                                             aggregated_weights: Dict):
@@ -398,80 +485,145 @@ class FederatedResponseManager:
     async def wait_for_aggregated_model(self, workflow_id: str, round_number: int, timeout: int = 180) -> Optional[Dict]:
         """Wait for aggregated model using event-driven approach instead of polling"""
         model_key = f"{workflow_id}_round_{round_number}"
+        wait_start_time = time.time()
+        
+        logger.info(f"🔍 FEDERATED RESPONSE: Starting wait for aggregated model")
+        logger.info(f"   • Model key: {model_key}")
+        logger.info(f"   • Node: {self.node_id}")
+        logger.info(f"   • Timeout: {timeout}s")
         
         # Check if model already exists
         if model_key in self.aggregated_models:
-            logger.info(f"Aggregated model for {model_key} already available")
-            return self.aggregated_models[model_key].get('aggregated_weights', {})
+            logger.info(f"⚡ AGGREGATED MODEL: Already available (cached)")
+            model_data = self.aggregated_models[model_key]
+            logger.info(f"   • Participating nodes: {model_data['participating_nodes']}")
+            logger.info(f"   • Aggregator: {model_data['aggregator_node']}")
+            logger.info(f"   • Retrieved from cache in {time.time() - wait_start_time:.3f}s")
+            return model_data.get('aggregated_weights', {})
         
         # Create event for this model if it doesn't exist
         if model_key not in self.model_events:
             self.model_events[model_key] = asyncio.Event()
-            logger.info(f"Created event for {model_key}")
+            logger.info(f"🟠 EVENT CREATED: Event handler created for {model_key}")
         
         try:
             # Wait for event to be signaled
-            logger.info(f"Waiting for aggregated model event: {model_key} (timeout: {timeout}s)")
+            logger.info(f"⏳ WAITING: For aggregated model event (max {timeout}s)")
             await asyncio.wait_for(self.model_events[model_key].wait(), timeout=timeout)
+            
+            wait_duration = time.time() - wait_start_time
             
             # Event was signaled, get the model
             if model_key in self.aggregated_models:
-                logger.info(f"✓ Received aggregated model for {model_key}")
+                logger.info(f"✅ AGGREGATED MODEL RECEIVED SUCCESSFULLY")
+                logger.info(f"   • Wait duration: {wait_duration:.2f}s")
                 
                 # Log model details
                 model_data = self.aggregated_models[model_key]
-                logger.info(f"  Participating nodes: {model_data['participating_nodes']}")
-                logger.info(f"  Aggregator: {model_data['aggregator_node']}")
+                logger.info(f"   • Participating nodes: {model_data['participating_nodes']}")
+                logger.info(f"   • Aggregator node: {model_data['aggregator_node']}")
+                logger.info(f"   • Model received at: {time.strftime('%H:%M:%S', time.localtime(model_data['received_time']))}")
                 
-                return model_data.get('aggregated_weights', {})
+                # Log weight information
+                aggregated_weights = model_data.get('aggregated_weights', {})
+                if aggregated_weights:
+                    logger.info(f"   • Weight layers: {len(aggregated_weights)}")
+                    logger.info(f"   • Layer names: {list(aggregated_weights.keys())[:3]}... (showing first 3)")
+                
+                return aggregated_weights
             else:
-                logger.warning(f"Event signaled but no model found for {model_key}")
+                logger.warning(f"⚠️ EVENT SIGNALED BUT MODEL MISSING")
+                logger.warning(f"   • Model key: {model_key}")
+                logger.warning(f"   • Wait duration: {wait_duration:.2f}s")
+                logger.warning(f"   • This may indicate a race condition")
                 return None
                 
         except asyncio.TimeoutError:
-            logger.warning(f"Timeout waiting for aggregated model: {model_key}")
+            wait_duration = time.time() - wait_start_time
+            logger.error(f"❌ AGGREGATED MODEL TIMEOUT")
+            logger.error(f"   • Model key: {model_key}")
+            logger.error(f"   • Timeout duration: {wait_duration:.2f}s (max: {timeout}s)")
+            logger.error(f"   • Possible causes: Aggregation failure, network issues, insufficient nodes")
             return None
         finally:
             # Clean up event
             if model_key in self.model_events:
                 del self.model_events[model_key]
-                logger.debug(f"Cleaned up event for {model_key}")
+                logger.debug(f"🧹 CLEANUP: Removed event for {model_key}")
     
     async def wait_for_training_completion(self, workflow_id: str, schedule_id: str, timeout: int = 120) -> Optional[Dict]:
         """Wait for training completion using event-driven approach instead of polling"""
+        wait_start_time = time.time()
+        
+        logger.info(f"🔍 TRAINING RESPONSE: Starting wait for training completion")
+        logger.info(f"   • Schedule ID: {schedule_id}")
+        logger.info(f"   • Workflow: {workflow_id}")
+        logger.info(f"   • Node: {self.node_id}")
+        logger.info(f"   • Timeout: {timeout}s")
+        
         # Check if weights already exist
         weights_data = await self.get_trained_weights_for_aggregation(workflow_id, schedule_id)
         if weights_data and 'trained_weights' in weights_data:
-            logger.info(f"Training weights for {schedule_id} already available")
-            return weights_data['trained_weights']
+            logger.info(f"⚡ TRAINING WEIGHTS: Already available (cached)")
+            logger.info(f"   • Training completed at: {time.strftime('%H:%M:%S', time.localtime(weights_data.get('training_completed_time', 0)))}")
+            logger.info(f"   • Retrieved from cache in {time.time() - wait_start_time:.3f}s")
+            
+            trained_weights = weights_data['trained_weights']
+            if trained_weights:
+                logger.info(f"   • Weight layers: {len(trained_weights)}")
+                logger.info(f"   • Layer names: {list(trained_weights.keys())[:3]}... (showing first 3)")
+            
+            return trained_weights
         
         # Create event for this training if it doesn't exist
         if schedule_id not in self.training_events:
             self.training_events[schedule_id] = asyncio.Event()
-            logger.info(f"Created training event for {schedule_id}")
+            logger.info(f"🟠 EVENT CREATED: Training event handler created for {schedule_id}")
         
         try:
             # Wait for event to be signaled
-            logger.info(f"Waiting for training completion event: {schedule_id} (timeout: {timeout}s)")
+            logger.info(f"⏳ WAITING: For training completion event (max {timeout}s)")
             await asyncio.wait_for(self.training_events[schedule_id].wait(), timeout=timeout)
+            
+            wait_duration = time.time() - wait_start_time
             
             # Event was signaled, get the weights
             weights_data = await self.get_trained_weights_for_aggregation(workflow_id, schedule_id)
             if weights_data and 'trained_weights' in weights_data:
-                logger.info(f"✓ Training completed for schedule {schedule_id}")
-                return weights_data['trained_weights']
+                logger.info(f"✅ TRAINING COMPLETED SUCCESSFULLY")
+                logger.info(f"   • Wait duration: {wait_duration:.2f}s")
+                logger.info(f"   • Training completed at: {time.strftime('%H:%M:%S', time.localtime(weights_data.get('training_completed_time', 0)))}")
+                
+                trained_weights = weights_data['trained_weights']
+                if trained_weights:
+                    logger.info(f"   • Weight layers received: {len(trained_weights)}")
+                    logger.info(f"   • Layer names: {list(trained_weights.keys())[:3]}... (showing first 3)")
+                
+                # Log training metadata if available
+                metadata = weights_data.get('training_metadata', {})
+                if metadata:
+                    logger.info(f"   • Training metadata: {metadata}")
+                
+                return trained_weights
             else:
-                logger.warning(f"Event signaled but no weights found for {schedule_id}")
+                logger.warning(f"⚠️ EVENT SIGNALED BUT WEIGHTS MISSING")
+                logger.warning(f"   • Schedule ID: {schedule_id}")
+                logger.warning(f"   • Wait duration: {wait_duration:.2f}s")
+                logger.warning(f"   • This may indicate a training failure or race condition")
                 return None
                 
         except asyncio.TimeoutError:
-            logger.error(f"Training timeout for schedule {schedule_id}")
+            wait_duration = time.time() - wait_start_time
+            logger.error(f"❌ TRAINING COMPLETION TIMEOUT")
+            logger.error(f"   • Schedule ID: {schedule_id}")
+            logger.error(f"   • Timeout duration: {wait_duration:.2f}s (max: {timeout}s)")
+            logger.error(f"   • Possible causes: Compute node failure, resource exhaustion, task timeout")
             return None
         finally:
             # Clean up event
             if schedule_id in self.training_events:
                 del self.training_events[schedule_id]
-                logger.debug(f"Cleaned up training event for {schedule_id}")
+                logger.debug(f"🧹 CLEANUP: Removed training event for {schedule_id}")
 
     async def shutdown(self):
         """Shutdown the federated response manager"""
