@@ -377,9 +377,8 @@ def start_federated_events_listener():
     """Start listening for federated events from Redis"""
     try:
         logger.info("Starting federated events listener")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(listen_for_federated_events())
+        # Use asyncio.run() to properly handle the event loop
+        asyncio.run(listen_for_federated_events())
     except Exception as e:
         logger.error(f"Error in federated events listener: {e}")
 
@@ -387,9 +386,8 @@ def start_federated_events_listener():
 async def listen_for_federated_events():
     """Listen for federated_events Redis channel"""
     try:
-        # Create a new Redis connection for pub/sub
-        federated_redis = initialize_redis()
-        pubsub = federated_redis.pubsub()
+        # Use the existing global Redis connection for pub/sub
+        pubsub = redis.pubsub()
         
         logger.info("Subscribing to federated_events Redis channel")
         await pubsub.subscribe('federated_events')
