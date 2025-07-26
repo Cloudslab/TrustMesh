@@ -743,7 +743,7 @@ items:"
                 - name: COUCHDB_HOST
                   value: \"couchdb-$i.default.svc.cluster.local:6984\"
                 - name: RESOURCE_UPDATE_INTERVAL
-                  value: \"30\"
+                  value: \"600\"
                 - name: RESOURCE_UPDATE_BATCH_SIZE
                   value: \"500\"
                 - name: COUCHDB_USER
