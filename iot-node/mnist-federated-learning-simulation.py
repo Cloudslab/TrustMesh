@@ -323,8 +323,8 @@ class MNISTFederatedNode:
                     training_data=training_data,
                     workflow_id=workflow_id,
                     node_id=self.node_id,
-                    iot_port="5000",
-                    iot_public_key="dummy_public_key",
+                    iot_port=self.device_manager.port,
+                    iot_public_key=self.device_manager.public_key,
                     phase="training",
                     round_number=round_number
                 )
@@ -336,8 +336,8 @@ class MNISTFederatedNode:
                 schedule_id = transaction_creator.create_and_send_transactions(
                     iot_data=training_data,
                     workflow_id=workflow_id,
-                    iot_port="5000",
-                    iot_public_key="dummy_public_key"
+                    iot_port=self.device_manager.port,
+                    iot_public_key=self.device_manager.public_key
                 )
             
             training_duration = time.time() - training_start_time
@@ -509,8 +509,8 @@ class MNISTFederatedNode:
                     training_data=training_data,
                     workflow_id=workflow_id,
                     node_id=self.node_id,
-                    iot_port="5000",
-                    iot_public_key="dummy_public_key",
+                    iot_port=self.device_manager.port,
+                    iot_public_key=self.device_manager.public_key,
                     trained_weights=trained_weights,
                     phase="aggregation",
                     round_number=round_number

@@ -5,7 +5,6 @@ import logging
 import os
 import ssl
 import tempfile
-import time
 import traceback
 
 from sawtooth_sdk.processor.handler import TransactionHandler
@@ -139,13 +138,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
             logger.error(f"Invalid workflow ID: {workflow_id}")
             raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
-        logger.info(f"Processing standard workflow for {workflow_id}")
-        self._handle_standard_schedule_request(payload, context, workflow_id, schedule_id,
-                                             source_url, source_public_key)
-
-    def _handle_standard_schedule_request(self, payload, context, workflow_id, schedule_id, 
-                                        source_url, source_public_key):
-        """Handle scheduling for all workflows"""
         logger.info("Selecting scheduler")
         scheduler_node = self.loop.run_until_complete(self._select_scheduler())
         logger.info(f"Selected scheduler node: {scheduler_node}")
@@ -178,7 +170,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         logger.info(f"Emitted event for schedule request. workflow_id: {workflow_id}, "
                     f"schedule_id: {schedule_id}, assigned_scheduler: {scheduler_node}")
 
-
     def _validate_workflow_id(self, context, workflow_id):
         logger.info(f"Validating workflow ID: {workflow_id}")
         address = self._make_workflow_address(workflow_id)
@@ -186,9 +177,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
         is_valid = len(state_entries) > 0
         logger.info(f"Workflow ID {workflow_id} is valid: {is_valid}")
         return is_valid
-
-
-
 
     async def _select_scheduler(self):
         logger.info("Entering _select_scheduler method")
@@ -241,7 +229,6 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     @staticmethod
     def _make_workflow_address(workflow_id):
         return WORKFLOW_NAMESPACE + hashlib.sha512(workflow_id.encode()).hexdigest()[:64]
-
 
 
 def main():
