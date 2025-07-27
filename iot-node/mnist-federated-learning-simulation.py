@@ -617,12 +617,12 @@ class MNISTFederatedNode:
                 # Wait for training to complete and get trained weights
                 logger.info(f"\n⏳ WAITING FOR TRAINING COMPLETION")
                 logger.info(f"   • Schedule ID: {schedule_id}")
-                logger.info(f"   • Timeout: 120 seconds")
+                logger.info(f"   • Timeout: 600 seconds")
                 logger.info(f"   • Waiting for compute node to process training data...")
                 
                 wait_start_time = time.time()
                 trained_weights = await fed_response_manager.wait_for_training_completion(
-                    workflow_id, schedule_id, timeout=120  # 2 minutes timeout
+                    workflow_id, schedule_id, timeout=600  # 2 minutes timeout
                 )
                 wait_duration = time.time() - wait_start_time
                 
@@ -767,7 +767,7 @@ class MNISTFederatedNode:
                 pass
 
     async def _wait_for_training_completion(self, fed_response_manager, workflow_id: str, 
-                                          schedule_id: str, timeout: int = 120) -> Optional[Dict]:
+                                          schedule_id: str, timeout: int = 600) -> Optional[Dict]:
         """Wait for training to complete and return trained weights"""
         import asyncio
         
