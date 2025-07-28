@@ -248,14 +248,18 @@ class MNISTFederatedTrainer:
             process_start_time = time.time()
             logger.info(f"Processing federated training request at {process_start_time}")
             
-            # Extract input parameters
+            # Extract input parameters (input_data is already correctly structured from handle_client)
             node_id = input_data.get('node_id', 'unknown')
             round_number = input_data.get('round_number', 1)
-            training_data = input_data
             # Use initial_weights from IoT node (could be random or from previous aggregation)
             initial_weights = input_data.get('initial_weights')
             
+            # training_data is the same as input_data (already has x_train, y_train at top level)
+            training_data = input_data
+            
             logger.info(f"Training request from node {node_id}, round {round_number}")
+            logger.info(f"input_data keys in process_federated_training: {list(input_data.keys())}")
+            logger.info(f"training_data keys in process_federated_training: {list(training_data.keys())}")
             logger.info(f"Training data size: {len(training_data.get('x_train', []))} samples")
             
             # Create or reset model
@@ -389,6 +393,12 @@ async def handle_client(reader, writer):
             'assigned_classes': training_request.get('assigned_classes', []),
             'samples_count': training_request.get('samples_count', 0)
         }
+        
+        # Debug logging to see the data structure
+        logger.info(f"training_data keys: {list(training_data.keys())}")
+        logger.info(f"x_train length: {len(training_data.get('x_train', []))}")
+        logger.info(f"y_train length: {len(training_data.get('y_train', []))}")
+        logger.info(f"initial_weights keys: {list(training_data.get('initial_weights', {}).keys())}")
         
         # Initialize trainer and process request
         trainer = MNISTFederatedTrainer()
