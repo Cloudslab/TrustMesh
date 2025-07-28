@@ -301,7 +301,7 @@ class FederatedResponseManager:
             logger.info(f"   • Workflow: {workflow_id}")
             logger.info(f"   • Schedule ID: {schedule_id}")
             
-            weights_key = f"trained_weights_{self.node_id}_{workflow_id}_{schedule_id}"
+            weights_key = f"trained_weights_{self.node_id}_{schedule_id}"
             
             # Log weight information
             if trained_weights:
@@ -386,7 +386,7 @@ class FederatedResponseManager:
     async def get_trained_weights_for_aggregation(self, workflow_id: str, schedule_id: str) -> Optional[Dict]:
         """Retrieve trained weights for aggregation request"""
         try:
-            weights_key = f"trained_weights_{self.node_id}_{workflow_id}_{schedule_id}"
+            weights_key = f"trained_weights_{self.node_id}_{schedule_id}"
             weights_data = self.trained_weights_storage.get(weights_key)
             
             if weights_data:
