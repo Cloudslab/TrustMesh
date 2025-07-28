@@ -387,7 +387,10 @@ class FederatedResponseManager:
         """Retrieve trained weights for aggregation request"""
         try:
             weights_key = f"trained_weights_{self.node_id}_{schedule_id}"
+            logger.info(f"🔍 WEIGHT LOOKUP: Searching for key '{weights_key}'")
+            logger.info(f"📋 AVAILABLE KEYS: {list(self.trained_weights_storage.keys())}")
             weights_data = self.trained_weights_storage.get(weights_key)
+            logger.info(f"🎯 LOOKUP RESULT: Found = {bool(weights_data)}")
             
             if weights_data:
                 return weights_data
@@ -558,10 +561,15 @@ class FederatedResponseManager:
             logger.info(f"⏳ WAITING: For training completion event (max {timeout}s)")
             await asyncio.wait_for(self.training_events[schedule_id].wait(), timeout=timeout)
             
+            logger.info(f"🎯 EVENT WAIT COMPLETED: Event was signaled and await returned")
             wait_duration = time.time() - wait_start_time
+            logger.info(f"🕐 WAIT DURATION: {wait_duration:.2f}s")
             
             # Event was signaled, get the weights
+            logger.info(f"🔍 RETRIEVING WEIGHTS: Looking for trained weights")
+            logger.info(f"   • Expected key: trained_weights_{self.node_id}_{schedule_id}")
             weights_data = await self.get_trained_weights_for_aggregation(workflow_id, schedule_id)
+            logger.info(f"📦 RETRIEVAL RESULT: weights_data = {bool(weights_data)}")
             if weights_data and 'trained_weights' in weights_data:
                 logger.info(f"✅ TRAINING COMPLETED SUCCESSFULLY")
                 logger.info(f"   • Wait duration: {wait_duration:.2f}s")
