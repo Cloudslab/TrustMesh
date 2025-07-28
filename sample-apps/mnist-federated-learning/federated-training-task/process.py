@@ -252,7 +252,8 @@ class MNISTFederatedTrainer:
             node_id = input_data.get('node_id', 'unknown')
             round_number = input_data.get('round_number', 1)
             training_data = input_data
-            global_weights = input_data.get('global_weights')  # From previous round
+            # Use initial_weights from IoT node (could be random or from previous aggregation)
+            initial_weights = input_data.get('initial_weights')
             
             logger.info(f"Training request from node {node_id}, round {round_number}")
             logger.info(f"Training data size: {len(training_data.get('x_train', []))} samples")
@@ -260,12 +261,12 @@ class MNISTFederatedTrainer:
             # Create or reset model
             self.model = self.create_model()
             
-            # Load global weights if available (from previous aggregation round)
-            if global_weights:
-                logger.info("Loading global weights from previous round")
-                self.load_global_weights(global_weights)
+            # Load initial weights if available (either random for round 1 or aggregated from previous round)
+            if initial_weights:
+                logger.info("Loading initial weights provided by IoT node")
+                self.load_global_weights(initial_weights)
             else:
-                logger.info("No global weights provided, using initial random weights")
+                logger.info("No initial weights provided, using random initialization")
             
             # Prepare training data
             x_train, y_train = self.prepare_data(training_data)
@@ -280,7 +281,7 @@ class MNISTFederatedTrainer:
                 'assigned_classes': training_data.get('assigned_classes', []),
                 'training_timestamp': time.time(),
                 'samples_count': len(x_train),
-                'global_weights_loaded': global_weights is not None
+                'global_weights_loaded': initial_weights is not None
             }
             
             process_end_time = time.time()
@@ -378,11 +379,10 @@ async def handle_client(reader, writer):
             raise ValueError("'initial_weights' field is required in the training request")
         
         # Restructure to match what process_federated_training expects
+        # Include x_train and y_train at the top level for prepare_data method
         training_data = {
-            'training_data': {
-                'x_train': training_request['x_train'],
-                'y_train': training_request['y_train']
-            },
+            'x_train': training_request['x_train'],
+            'y_train': training_request['y_train'],
             'initial_weights': training_request['initial_weights'],
             'node_id': training_request.get('node_id', 'unknown'),
             'round_number': training_request.get('round_number', 1),
