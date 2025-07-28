@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -321,9 +321,12 @@ async def read_json(reader):
                 data = json.loads(buffer.decode())
                 logger.info(f"Successfully parsed JSON data (size: {len(buffer)} bytes)")
                 return data
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 # If JSON is incomplete, continue reading
                 attempts += 1
+                logger.debug(f"JSON parse attempt {attempts} failed: {e}")
+                logger.debug(f"Buffer preview (first 200 chars): {buffer[:200].decode(errors='ignore')}")
+                logger.debug(f"Buffer preview (last 200 chars): {buffer[-200:].decode(errors='ignore')}")
                 continue
                 
         except asyncio.TimeoutError:
@@ -338,6 +341,11 @@ async def read_json(reader):
             else:
                 raise ValueError("Timeout waiting for JSON data")
     
+    # Final debug log before failing
+    logger.error(f"Final JSON parse failure after {max_attempts} attempts:")
+    logger.error(f"Buffer size: {len(buffer)} bytes")
+    logger.error(f"Buffer start (500 chars): {buffer[:500].decode(errors='ignore')}")
+    logger.error(f"Buffer end (500 chars): {buffer[-500:].decode(errors='ignore')}")
     raise ValueError(f"Failed to parse JSON after {max_attempts} attempts, buffer size: {len(buffer)} bytes")
 
 async def handle_client(reader, writer):
