@@ -297,13 +297,14 @@ class MNISTFederatedTrainer:
 async def read_json(reader):
     """Read JSON data from the stream with improved handling"""
     buffer = b""
-    max_attempts = 10  # Prevent infinite loops
-    attempts = 0
+    max_buffer_size = 10 * 1024 * 1024  # 10MB max buffer size
+    total_timeout = 60.0  # Total timeout for reading entire JSON (1 minute)
+    start_time = time.time()
     
-    while attempts < max_attempts:
+    while len(buffer) < max_buffer_size and (time.time() - start_time) < total_timeout:
         try:
-            # Try to read with a reasonable timeout
-            chunk = await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            # Try to read with a larger chunk size for ML data
+            chunk = await asyncio.wait_for(reader.read(65536), timeout=5.0)  # 64KB chunks
             if not chunk:
                 if buffer:
                     # Try to parse what we have
@@ -323,10 +324,7 @@ async def read_json(reader):
                 return data
             except json.JSONDecodeError as e:
                 # If JSON is incomplete, continue reading
-                attempts += 1
-                logger.debug(f"JSON parse attempt {attempts} failed: {e}")
-                logger.debug(f"Buffer preview (first 200 chars): {buffer[:200].decode(errors='ignore')}")
-                logger.debug(f"Buffer preview (last 200 chars): {buffer[-200:].decode(errors='ignore')}")
+                logger.debug(f"JSON parse failed (buffer size: {len(buffer)}): {e}")
                 continue
                 
         except asyncio.TimeoutError:
@@ -342,11 +340,16 @@ async def read_json(reader):
                 raise ValueError("Timeout waiting for JSON data")
     
     # Final debug log before failing
-    logger.error(f"Final JSON parse failure after {max_attempts} attempts:")
-    logger.error(f"Buffer size: {len(buffer)} bytes")
+    elapsed_time = time.time() - start_time
+    if len(buffer) >= max_buffer_size:
+        error_msg = f"JSON data too large: {len(buffer)} bytes (max: {max_buffer_size})"
+    else:
+        error_msg = f"Timeout reading JSON data after {elapsed_time:.1f}s, buffer size: {len(buffer)} bytes"
+    
+    logger.error(f"Final JSON parse failure: {error_msg}")
     logger.error(f"Buffer start (500 chars): {buffer[:500].decode(errors='ignore')}")
     logger.error(f"Buffer end (500 chars): {buffer[-500:].decode(errors='ignore')}")
-    raise ValueError(f"Failed to parse JSON after {max_attempts} attempts, buffer size: {len(buffer)} bytes")
+    raise ValueError(error_msg)
 
 async def handle_client(reader, writer):
     """Handle a single client request"""
