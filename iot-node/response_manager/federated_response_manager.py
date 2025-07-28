@@ -90,20 +90,36 @@ class FederatedResponseManager:
                         timeout=5.0
                     )
                     
-                    response_data = json.loads(response_bytes.decode())
+                    # Try to parse as JSON first (for structured responses)
+                    try:
+                        response_data = json.loads(response_bytes.decode())
+                        logger.info(f"Received structured JSON response: {list(response_data.keys())}")
+                        
+                        # Determine response type and process accordingly
+                        event_type = response_data.get('event_type')
+                        
+                        if event_type == 'aggregated_model_ready':
+                            # Handle aggregated model from aggregator compute node
+                            await self._handle_aggregated_model(response_data)
+                        else:
+                            # Handle training results or other compute responses
+                            await self._process_compute_response(response_data)
+                            
+                    except json.JSONDecodeError:
+                        # Handle plain text responses (standard ResponseManager format)
+                        response_text = response_bytes.decode()
+                        logger.info(f"Received plain text response from compute node")
+                        logger.info(f"Response content: {response_text[:200]}..." if len(response_text) > 200 else f"Response content: {response_text}")
+                        
+                        # Try to parse the text as JSON (task execution result)
+                        try:
+                            response_data = json.loads(response_text)
+                            await self._process_compute_response(response_data)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Could not parse response as JSON: {response_text[:100]}...")
                     
-                    # Determine response type and process accordingly
-                    event_type = response_data.get('event_type')
-                    
-                    if event_type == 'aggregated_model_ready':
-                        # Handle aggregated model from aggregator compute node
-                        await self._handle_aggregated_model(response_data)
-                    else:
-                        # Handle training results or other compute responses
-                        await self._process_compute_response(response_data)
-                    
-                    # Send acknowledgment
-                    ack = json.dumps({"status": "received", "timestamp": time.time()})
+                    # Send acknowledgment (standard IoT device response)
+                    ack = "Message received securely"
                     await self.zmq_socket.send_string(ack)
                     
                 except asyncio.TimeoutError:
@@ -112,9 +128,8 @@ class FederatedResponseManager:
                 except Exception as e:
                     logger.error(f"Error handling ZMQ response: {e}")
                     # Send error acknowledgment
-                    error_ack = json.dumps({"status": "error", "message": str(e)})
                     try:
-                        await self.zmq_socket.send_string(error_ack)
+                        await self.zmq_socket.send_string("Error processing message")
                     except:
                         pass
                         
@@ -222,29 +237,32 @@ class FederatedResponseManager:
         """Process responses from compute nodes (training results)"""
         try:
             logger.info(f"Processing compute response for node {self.node_id}")
+            logger.info(f"Response data keys: {list(response_data.keys())}")
             
+            # Handle TrustMesh task execution format from task_executor
             schedule_id = response_data.get('schedule_id')
-            status = response_data.get('status')
-            result_data = response_data.get('result', {})
+            workflow_id = response_data.get('workflow_id')
             
-            if status == 'COMPLETE' and 'trained_weights' in result_data:
-                # Training completed, extract trained weights
-                trained_weights = result_data['trained_weights']
-                workflow_id = response_data.get('workflow_id')
+            if 'data' in response_data and isinstance(response_data['data'], list) and response_data['data']:
+                result_data = response_data['data'][0]  # Extract first item from data array
                 
-                logger.info(f"Training completed for schedule {schedule_id}, extracting weights")
-                
-                # Store trained weights for potential aggregation request
-                await self._store_trained_weights(workflow_id, schedule_id, trained_weights, result_data)
-                
-            elif status == 'ERROR':
-                logger.error(f"Training failed for schedule {schedule_id}: {result_data.get('error')}")
-                
+                if 'trained_weights' in result_data:
+                    # Training completed successfully
+                    trained_weights = result_data['trained_weights']
+                    
+                    logger.info(f"Training completed for schedule {schedule_id}, extracting weights")
+                    logger.info(f"Trained weights layers: {len(trained_weights) if trained_weights else 0}")
+                    
+                    # Store trained weights for potential aggregation request
+                    await self._store_trained_weights(workflow_id, schedule_id, trained_weights, result_data)
+                else:
+                    logger.warning(f"No trained weights found in response data for schedule {schedule_id}")
             else:
-                logger.info(f"Received intermediate response - Status: {status}")
+                logger.warning(f"Invalid or empty data in response for schedule {schedule_id}")
                 
         except Exception as e:
             logger.error(f"Error processing compute response: {e}")
+            logger.error(f"Response data: {response_data}")
 
     async def _store_trained_weights(self, workflow_id: str, schedule_id: str, 
                                    trained_weights: Dict, result_data: Dict):
