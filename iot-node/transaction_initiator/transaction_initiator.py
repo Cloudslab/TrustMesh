@@ -116,6 +116,8 @@ class TransactionCreator:
 
     def submit_batch(self, batch):
         """Submit batch to the next validator in the round-robin sequence"""
+        from sawtooth_sdk.protobuf.client_batch_submit_pb2 import ClientBatchSubmitResponse
+        
         validator_url = self.get_next_validator_url()
         logger.info(f"Submitting batch to validator: {validator_url}")
 
@@ -126,19 +128,57 @@ class TransactionCreator:
                 content=BatchList(batches=[batch]).SerializeToString()
             )
             result = future.result()
-            return result
+            
+            # Parse the ClientBatchSubmitResponse to check actual status
+            response = ClientBatchSubmitResponse()
+            response.ParseFromString(result.content)
+            
+            # Check the actual status code
+            logger.info(f"Batch submission response - Status code: {response.status}")
+            if response.status == ClientBatchSubmitResponse.OK:
+                logger.info(f"Batch submitted successfully with status OK (code: {response.status})")
+                return result
+            elif response.status == ClientBatchSubmitResponse.INVALID_BATCH:
+                logger.error(f"Batch submission failed: INVALID_BATCH (code: {response.status})")
+                raise Exception(f"Invalid batch submission: {response}")
+            elif response.status == ClientBatchSubmitResponse.INTERNAL_ERROR:
+                logger.error(f"Batch submission failed: INTERNAL_ERROR (code: {response.status})")
+                raise Exception(f"Internal error during batch submission: {response}")
+            elif response.status == ClientBatchSubmitResponse.QUEUE_FULL:
+                logger.error(f"Batch submission failed: QUEUE_FULL (code: {response.status})")
+                raise Exception(f"Validator queue full: {response}")
+            else:
+                logger.error(f"Batch submission failed with unknown status: {response.status}")
+                raise Exception(f"Unknown status during batch submission: {response}")
+                
         except Exception as e:
             logger.error(f"Failed to submit to validator {validator_url}: {str(e)}")
             # If submission fails, try the next validator
             if len(VALIDATOR_URLS) > 1:
                 validator_url = self.get_next_validator_url()
                 logger.info(f"Retrying with next validator: {validator_url}")
-                stream = Stream(validator_url)
-                future = stream.send(
-                    message_type='CLIENT_BATCH_SUBMIT_REQUEST',
-                    content=BatchList(batches=[batch]).SerializeToString()
-                )
-                return future.result()
+                try:
+                    stream = Stream(validator_url)
+                    future = stream.send(
+                        message_type='CLIENT_BATCH_SUBMIT_REQUEST',
+                        content=BatchList(batches=[batch]).SerializeToString()
+                    )
+                    result = future.result()
+                    
+                    # Parse the response for retry as well
+                    response = ClientBatchSubmitResponse()
+                    response.ParseFromString(result.content)
+                    
+                    logger.info(f"Retry batch submission response - Status code: {response.status}")
+                    if response.status == ClientBatchSubmitResponse.OK:
+                        logger.info(f"Batch submitted successfully on retry with status OK (code: {response.status})")
+                        return result
+                    else:
+                        logger.error(f"Retry also failed with status: {response.status}")
+                        raise Exception(f"Retry failed with status {response.status}: {response}")
+                except Exception as retry_e:
+                    logger.error(f"Retry to validator {validator_url} also failed: {str(retry_e)}")
+                    raise
             raise
 
     def create_and_send_transactions(self, iot_data, workflow_id, iot_port, iot_public_key):

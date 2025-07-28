@@ -10,6 +10,7 @@ import json
 import logging
 import numpy as np
 import os
+import threading
 import time
 import zmq
 import zmq.asyncio
@@ -38,9 +39,9 @@ class FederatedResponseManager:
         self.aggregated_models = {}
         self.round_history = []
         
-        # Event-driven coordination
-        self.model_events = {}  # workflow_round -> asyncio.Event
-        self.training_events = {}  # schedule_id -> asyncio.Event
+        # Event-driven coordination - use threading.Event for cross-thread compatibility
+        self.model_events = {}  # workflow_round -> threading.Event
+        self.training_events = {}  # schedule_id -> threading.Event
         self.convergence_tracker = {}
         
         # Local storage for trained weights (instead of Redis)
@@ -343,7 +344,7 @@ class FederatedResponseManager:
             logger.info(f"   • Storage duration: {storage_duration:.3f}s")
             logger.info(f"   • Storage key: {weights_key}")
             
-            # Signal event for waiting coroutines
+            # Signal event for waiting coroutines - threading.Event works across threads
             if schedule_id in self.training_events:
                 self.training_events[schedule_id].set()
                 logger.info(f"🚨 EVENT SIGNALED: Notified waiting coroutines for {schedule_id}")
@@ -479,7 +480,7 @@ class FederatedResponseManager:
         
         # Create event for this model if it doesn't exist
         if model_key not in self.model_events:
-            self.model_events[model_key] = asyncio.Event()
+            self.model_events[model_key] = threading.Event()
             logger.info(f"🟠 EVENT CREATED: Event handler created for {model_key}")
         
         try:
@@ -553,13 +554,17 @@ class FederatedResponseManager:
         
         # Create event for this training if it doesn't exist
         if schedule_id not in self.training_events:
-            self.training_events[schedule_id] = asyncio.Event()
+            self.training_events[schedule_id] = threading.Event()
             logger.info(f"🟠 EVENT CREATED: Training event handler created for {schedule_id}")
         
         try:
-            # Wait for event to be signaled
+            # Wait for event to be signaled using asyncio thread executor
             logger.info(f"⏳ WAITING: For training completion event (max {timeout}s)")
-            await asyncio.wait_for(self.training_events[schedule_id].wait(), timeout=timeout)
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, self.training_events[schedule_id].wait, timeout),
+                timeout=timeout + 1  # Add buffer to asyncio timeout
+            )
             
             logger.info(f"🎯 EVENT WAIT COMPLETED: Event was signaled and await returned")
             wait_duration = time.time() - wait_start_time
