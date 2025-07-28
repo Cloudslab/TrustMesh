@@ -169,9 +169,6 @@ class TransactionCreator:
                 "timestamp": timestamp,
                 "status": "REQUESTED"
             }
-            
-            if node_id:
-                status_payload["node_id"] = node_id
                 
             status_inputs = [STATUS_NAMESPACE]
             status_outputs = [STATUS_NAMESPACE]
