@@ -13,6 +13,8 @@ import os
 import time
 import zmq
 import zmq.asyncio
+import zmq.auth
+from zmq.auth.thread import ThreadAuthenticator
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -44,6 +46,9 @@ class FederatedResponseManager:
         # Local storage for trained weights (instead of Redis)
         self.trained_weights_storage = {}
         
+        # CURVE authentication keys (same as IoTDeviceManager)
+        self._public_key, self._private_key = self._generate_keys(node_id)
+        
         # Initialize ZMQ connection for receiving models
         self._initialize_zmq()
         
@@ -51,14 +56,34 @@ class FederatedResponseManager:
 
     # Redis not needed for IoT nodes - they only receive models via ZMQ
 
+    @staticmethod
+    def _generate_keys(source):
+        """Generate CURVE authentication keys (same as IoTDeviceManager)"""
+        keys_dir = os.path.join(os.getcwd(), 'keys/', source)
+        os.makedirs(keys_dir, exist_ok=True)
+        server_public_file, server_secret_file = zmq.auth.create_certificates(keys_dir, "server")
+        server_public, server_secret = zmq.auth.load_certificate(server_secret_file)
+        return server_public, server_secret
+
     def _initialize_zmq(self):
-        """Initialize ZMQ socket for receiving responses"""
+        """Initialize ZMQ socket for receiving responses with CURVE authentication"""
         try:
             self.zmq_context = zmq.asyncio.Context()
+            
+            # Start an authenticator for this context (same as IoTDeviceManager)
+            self.auth = ThreadAuthenticator(self.zmq_context)
+            self.auth.start()
+            self.auth.configure_curve(domain='*', location=zmq.auth.CURVE_ALLOW_ANY)
+            
             self.zmq_socket = self.zmq_context.socket(zmq.REP)
+            # Configure CURVE authentication (same as IoTDeviceManager)
+            self.zmq_socket.curve_secretkey = self._private_key
+            self.zmq_socket.curve_publickey = self._public_key
+            self.zmq_socket.curve_server = True  # must come before bind
             self.zmq_socket.bind(f"tcp://*:{ZMQ_RESPONSE_PORT}")
             
-            logger.info(f"ZMQ response socket bound to port {ZMQ_RESPONSE_PORT}")
+            logger.info(f"ZMQ response socket bound to port {ZMQ_RESPONSE_PORT} with CURVE authentication")
+            logger.info(f"Public key: {self.public_key}")
             
         except Exception as e:
             logger.error(f"Failed to initialize ZMQ: {str(e)}")
@@ -100,6 +125,7 @@ class FederatedResponseManager:
                         
                         if event_type == 'aggregated_model_ready':
                             # Handle aggregated model from aggregator compute node
+                            logger.info(f"Received aggregated model ready event")
                             await self._handle_aggregated_model(response_data)
                         else:
                             # Handle training results or other compute responses
@@ -572,11 +598,18 @@ class FederatedResponseManager:
                 del self.training_events[schedule_id]
                 logger.debug(f"🧹 CLEANUP: Removed training event for {schedule_id}")
 
+    @property
+    def public_key(self):
+        """Get the public key of the federated response manager (same as IoTDeviceManager)"""
+        return self._public_key.decode('ascii')
+
     async def shutdown(self):
         """Shutdown the federated response manager"""
         logger.info(f"Shutting down federated response manager for node {self.node_id}")
         self.running = False
         
+        if hasattr(self, 'auth') and self.auth:
+            self.auth.stop()
         if self.zmq_socket:
             self.zmq_socket.close()
         if self.zmq_context:

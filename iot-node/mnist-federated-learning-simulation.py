@@ -328,7 +328,7 @@ class MNISTFederatedNode:
                     workflow_id=workflow_id,
                     node_id=self.node_id,
                     iot_port=self.device_manager.port,
-                    iot_public_key=self.device_manager.public_key,
+                    iot_public_key=fed_response_manager.public_key,  # Use federated response manager's key
                     phase="training",
                     round_number=round_number
                 )
@@ -341,7 +341,7 @@ class MNISTFederatedNode:
                     iot_data=training_data,
                     workflow_id=workflow_id,
                     iot_port=self.device_manager.port,
-                    iot_public_key=self.device_manager.public_key
+                    iot_public_key=fed_response_manager.public_key  # Use federated response manager's key
                 )
             
             training_duration = time.time() - training_start_time
@@ -497,7 +497,19 @@ class MNISTFederatedNode:
             training_data = {
                 'assigned_classes': self.assigned_classes,
                 'x_train': [],  # Empty for aggregation phase
-                'total_samples': self.data_partition.get('train_samples', 0)
+                'total_samples': self.data_partition.get('train_samples', 0),
+                'metadata': {
+                    'connection_info': {
+                        'iot_public_key': fed_response_manager.public_key,
+                        'iot_port': self.device_manager.port,
+                        'iot_address': f"tcp://{self.node_id}:{self.device_manager.port}"
+                    },
+                    'training_info': {
+                        'assigned_classes': self.assigned_classes,
+                        'total_samples': self.data_partition.get('train_samples', 0),
+                        'node_index': self.node_index
+                    }
+                }
             }
             
             logger.info(f"🔗 BLOCKCHAIN TRANSACTION: Submitting aggregation request")
@@ -514,7 +526,7 @@ class MNISTFederatedNode:
                     workflow_id=workflow_id,
                     node_id=self.node_id,
                     iot_port=self.device_manager.port,
-                    iot_public_key=self.device_manager.public_key,
+                    iot_public_key=fed_response_manager.public_key,  # Use federated response manager's key
                     trained_weights=trained_weights,
                     phase="aggregation",
                     round_number=round_number
