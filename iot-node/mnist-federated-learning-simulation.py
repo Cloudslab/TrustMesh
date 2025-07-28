@@ -264,7 +264,7 @@ class MNISTFederatedNode:
         """Get list of expected node IDs"""
         return [f"iot-{i}" for i in range(TOTAL_NODES)]
     
-    def submit_training_phase(self, workflow_id: str, round_number: int) -> Optional[str]:
+    def submit_training_phase(self, workflow_id: str, round_number: int, fed_response_manager) -> Optional[str]:
         """Submit data for the training phase of federated learning"""
         training_start_time = time.time()
         try:
@@ -463,7 +463,7 @@ class MNISTFederatedNode:
             logger.error(f"   • Node: {self.node_id}")
             return 0.0
 
-    def submit_aggregation_phase(self, workflow_id: str, round_number: int, trained_weights: Dict) -> bool:
+    def submit_aggregation_phase(self, workflow_id: str, round_number: int, trained_weights: Dict, fed_response_manager) -> bool:
         """Submit trained model weights for the aggregation phase"""
         aggregation_start_time = time.time()
         try:
@@ -622,7 +622,7 @@ class MNISTFederatedNode:
                 logger.info(f"   • Objective: Submit training data to TrustMesh for processing")
                 logger.info(f"   • Expected outcome: Receive trained model weights")
                 
-                schedule_id = self.submit_training_phase(workflow_id, round_num)
+                schedule_id = self.submit_training_phase(workflow_id, round_num, fed_response_manager)
                 
                 if not schedule_id:
                     logger.error(f"❌ ROUND {round_num} ABORTED - Training phase submission failed")
@@ -660,7 +660,7 @@ class MNISTFederatedNode:
                 logger.info(f"   • Objective: Submit trained weights for global aggregation")
                 logger.info(f"   • Expected outcome: Contribute to FedAvg aggregation process")
                 
-                aggregation_success = self.submit_aggregation_phase(workflow_id, round_num, trained_weights)
+                aggregation_success = self.submit_aggregation_phase(workflow_id, round_num, trained_weights, fed_response_manager)
                 
                 if not aggregation_success:
                     logger.error(f"❌ AGGREGATION SUBMISSION FAILED")
