@@ -141,15 +141,11 @@ class TransactionCreator:
                 return future.result()
             raise
 
-    def create_and_send_transactions(self, iot_data, workflow_id, iot_port, iot_public_key, node_id=None, federated_schedule_id=None):
+    def create_and_send_transactions(self, iot_data, workflow_id, iot_port, iot_public_key):
         try:
-            # For federated learning, use provided schedule_id, otherwise generate new one
-            if federated_schedule_id:
-                schedule_id = federated_schedule_id
-                logger.info(f"Using federated schedule ID: {schedule_id} for node {node_id}")
-            else:
-                schedule_id = str(uuid.uuid4())
-                logger.info(f"Generated new schedule ID: {schedule_id}")
+            # Always generate a new schedule_id for each transaction
+            schedule_id = str(uuid.uuid4())
+            logger.info(f"Generated new schedule ID: {schedule_id}")
             
             timestamp = int(time.time())
 
@@ -160,10 +156,6 @@ class TransactionCreator:
                 "source_public_key": iot_public_key,
                 "timestamp": timestamp
             }
-            
-            # Add node_id for federated learning workflows
-            if node_id:
-                schedule_payload["node_id"] = node_id
 
             schedule_inputs = [SCHEDULE_NAMESPACE, WORKFLOW_NAMESPACE]
             schedule_outputs = [SCHEDULE_NAMESPACE]
@@ -192,10 +184,6 @@ class TransactionCreator:
                 "workflow_id": workflow_id,
                 "schedule_id": schedule_id
             }
-            
-            # Add node_id for federated learning workflows
-            if node_id:
-                iot_data_payload["node_id"] = node_id
                 
             iot_data_inputs = [IOT_DATA_NAMESPACE, WORKFLOW_NAMESPACE]
             iot_data_outputs = [IOT_DATA_NAMESPACE]
@@ -218,86 +206,6 @@ class TransactionCreator:
             logger.error(f"Error creating and sending transactions: {str(ex)}")
             raise
 
-    def create_federated_learning_transactions(self, iot_data, workflow_id, iot_port, iot_public_key, node_id):
-        """
-        Create transactions for federated learning workflows.
-        This method handles the coordination needed for multiple nodes to share the same schedule_id.
-        """
-        try:
-            # Check if a federated round already exists for this workflow
-            federated_schedule_id = self._get_or_create_federated_schedule_id(workflow_id, node_id)
-            
-            logger.info(f"Creating federated learning transactions for node {node_id} with schedule_id {federated_schedule_id}")
-            
-            # Use the shared schedule_id for federated learning
-            return self.create_and_send_transactions(
-                iot_data=iot_data,
-                workflow_id=workflow_id,
-                iot_port=iot_port,
-                iot_public_key=iot_public_key,
-                node_id=node_id,
-                federated_schedule_id=federated_schedule_id
-            )
-            
-        except Exception as e:
-            logger.error(f"Error creating federated learning transactions: {str(e)}")
-            raise
-
-    def _get_or_create_federated_schedule_id(self, workflow_id, node_id):
-        """
-        Get existing federated schedule ID or create a new one for coordinator node.
-        In a production environment, this would query the federated-schedule-tp.
-        """
-        try:
-            # For this implementation, we'll use a deterministic approach
-            # The first node (iot-0) creates the schedule_id, others join
-            
-            if node_id == 'iot-0':
-                # Coordinator node creates new federated round
-                schedule_id = str(uuid.uuid4())
-                logger.info(f"Coordinator node {node_id} created federated schedule_id: {schedule_id}")
-                
-                # In production, this would submit a transaction to federated-schedule-tp
-                # to record the federated round
-                self._record_federated_round(workflow_id, schedule_id, node_id)
-                
-                return schedule_id
-            else:
-                # Participant node joins existing round
-                # In production, this would query the federated-schedule-tp for existing rounds
-                existing_schedule_id = self._get_existing_federated_round(workflow_id)
-                
-                if existing_schedule_id:
-                    logger.info(f"Participant node {node_id} joining existing federated round: {existing_schedule_id}")
-                    return existing_schedule_id
-                else:
-                    logger.warning(f"No existing federated round found for {workflow_id}, node {node_id} will wait or create fallback")
-                    # Fallback: create a new schedule_id (this should be rare)
-                    return str(uuid.uuid4())
-                    
-        except Exception as e:
-            logger.error(f"Error getting/creating federated schedule ID: {str(e)}")
-            # Fallback to regular schedule ID generation
-            return str(uuid.uuid4())
-
-    def _record_federated_round(self, workflow_id, schedule_id, coordinator_node):
-        """
-        Record federated round information.
-        In production, this would submit a transaction to federated-schedule-tp.
-        """
-        logger.info(f"Recording federated round: workflow={workflow_id}, schedule={schedule_id}, coordinator={coordinator_node}")
-        # This is a placeholder - in production this would create a transaction
-        # to the federated-schedule-tp to record the round information
-
-    def _get_existing_federated_round(self, workflow_id):
-        """
-        Check for existing federated rounds for this workflow.
-        In production, this would query the federated-schedule-tp.
-        """
-        logger.info(f"Checking for existing federated round for workflow: {workflow_id}")
-        # This is a placeholder - in production this would query the blockchain
-        # or Redis for existing federated round information
-        return None  # For now, always return None (no existing round found)
 
     def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=None, metadata=None):
         """
@@ -357,18 +265,18 @@ class TransactionCreator:
                                              phase="training", round_number=1):
         """
         Create transactions for two-phase federated learning flow.
-        Phase 1: Submit training data for local training
-        Phase 2: Submit trained model weights for aggregation
+        Phase 1: Submit training data for local training (uses standard TrustMesh flow)
+        Phase 2: Submit trained model weights for aggregation (uses new aggregation-request-tp)
         """
         try:
             if phase == "training":
                 logger.info(f"Phase 1: Submitting training data for node {node_id}")
-                return self.create_federated_learning_transactions(
+                # Use standard TrustMesh flow for training - no node_id needed
+                return self.create_and_send_transactions(
                     iot_data=training_data,
                     workflow_id=workflow_id,
                     iot_port=iot_port,
-                    iot_public_key=iot_public_key,
-                    node_id=node_id
+                    iot_public_key=iot_public_key
                 )
                 
             elif phase == "aggregation":
