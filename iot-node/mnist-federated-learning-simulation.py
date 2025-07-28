@@ -290,7 +290,8 @@ class MNISTFederatedNode:
             
             initial_weights = self._get_initial_weights_for_round(round_number)
             
-            training_data = {
+            # Create training data payload in TrustMesh list format
+            training_request = {
                 'node_id': self.node_id,
                 'node_index': self.node_index,
                 'round_number': round_number,
@@ -307,6 +308,9 @@ class MNISTFederatedNode:
                     'class_distribution': self.data_partition['train_distribution']
                 }
             }
+            
+            # Wrap in list format expected by TrustMesh iot-data-tp
+            training_data = [training_request]
             
             logger.info(f"🔢 WEIGHT INITIALIZATION: {'Random weights (Round 1)' if round_number == 1 else 'Previous aggregated weights'}")
             logger.info(f"   • Weight layers: {len(initial_weights)} layers")
