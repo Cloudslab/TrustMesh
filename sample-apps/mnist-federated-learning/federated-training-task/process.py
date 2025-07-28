@@ -245,7 +245,8 @@ class MNISTFederatedTrainer:
     def process_federated_training(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Main processing function for federated training"""
         try:
-            logger.info("Processing federated training request")
+            process_start_time = time.time()
+            logger.info(f"Processing federated training request at {process_start_time}")
             
             # Extract input parameters
             node_id = input_data.get('node_id', 'unknown')
@@ -254,6 +255,7 @@ class MNISTFederatedTrainer:
             global_weights = input_data.get('global_weights')  # From previous round
             
             logger.info(f"Training request from node {node_id}, round {round_number}")
+            logger.info(f"Training data size: {len(training_data.get('x_train', []))} samples")
             
             # Create or reset model
             self.model = self.create_model()
@@ -281,7 +283,10 @@ class MNISTFederatedTrainer:
                 'global_weights_loaded': global_weights is not None
             }
             
+            process_end_time = time.time()
+            process_duration = process_end_time - process_start_time
             logger.info(f"Successfully completed federated training for node {node_id}")
+            logger.info(f"Total processing time: {process_duration:.2f} seconds")
             return training_result
             
         except Exception as e:
@@ -290,17 +295,50 @@ class MNISTFederatedTrainer:
 
 
 async def read_json(reader):
-    """Read JSON data from the stream, similar to cold-chain monitoring pattern"""
+    """Read JSON data from the stream with improved handling"""
     buffer = b""
-    while True:
-        chunk = await reader.read(4096)
-        if not chunk:
-            raise ValueError("Connection closed before receiving a valid JSON object.")
-        buffer += chunk
+    max_attempts = 10  # Prevent infinite loops
+    attempts = 0
+    
+    while attempts < max_attempts:
         try:
-            return json.loads(buffer.decode())
-        except json.JSONDecodeError:
-            continue
+            # Try to read with a reasonable timeout
+            chunk = await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            if not chunk:
+                if buffer:
+                    # Try to parse what we have
+                    try:
+                        return json.loads(buffer.decode())
+                    except json.JSONDecodeError:
+                        raise ValueError("Connection closed with incomplete JSON data")
+                else:
+                    raise ValueError("Connection closed before receiving any data")
+            
+            buffer += chunk
+            
+            # Try to parse the accumulated buffer
+            try:
+                data = json.loads(buffer.decode())
+                logger.info(f"Successfully parsed JSON data (size: {len(buffer)} bytes)")
+                return data
+            except json.JSONDecodeError:
+                # If JSON is incomplete, continue reading
+                attempts += 1
+                continue
+                
+        except asyncio.TimeoutError:
+            if buffer:
+                # Try to parse what we have on timeout
+                try:
+                    data = json.loads(buffer.decode())
+                    logger.info(f"Parsed JSON data after timeout (size: {len(buffer)} bytes)")
+                    return data
+                except json.JSONDecodeError:
+                    raise ValueError(f"Timeout reading JSON data, buffer size: {len(buffer)} bytes")
+            else:
+                raise ValueError("Timeout waiting for JSON data")
+    
+    raise ValueError(f"Failed to parse JSON after {max_attempts} attempts, buffer size: {len(buffer)} bytes")
 
 async def handle_client(reader, writer):
     """Handle a single client request"""
@@ -310,8 +348,10 @@ async def handle_client(reader, writer):
         logger.info("New client connected for federated training")
         
         # Read JSON input data
+        logger.info("Reading JSON data from client...")
         input_data = await read_json(reader)
         logger.info(f"Received JSON data with keys: {list(input_data.keys())}")
+        logger.info(f"JSON data size: {len(str(input_data))} characters")
         
         # Validate required fields - expect data wrapped like cold-chain monitoring
         if 'data' not in input_data or not isinstance(input_data['data'], list):

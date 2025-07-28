@@ -19,6 +19,9 @@ from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
 from helper.blockchain_task_status_updater import status_update_transactor
 from helper.response_manager import ResponseManager
 
+# Task execution timeout (configurable for ML tasks)
+TASK_EXECUTION_TIMEOUT = int(os.getenv('TASK_EXECUTION_TIMEOUT', '300'))  # 5 minutes default
+
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -655,6 +658,7 @@ class TaskExecutor:
     async def run_docker_task(self, app_id, input_data, total_task_time):
         container_name = f"sawtooth-{app_id}"
         logger.info(f"Starting run_docker_task for container: {container_name}")
+        logger.info(f"Task execution timeout: {TASK_EXECUTION_TIMEOUT} seconds")
         try:
             container = self.docker_client.containers.get(container_name)
             container_info = container.attrs
@@ -681,7 +685,7 @@ class TaskExecutor:
                 writer.write(payload)
                 await writer.drain()
 
-                response_data = await asyncio.wait_for(reader.read(), timeout=30)
+                response_data = await asyncio.wait_for(reader.read(), timeout=TASK_EXECUTION_TIMEOUT)
 
                 result = json.loads(response_data.decode())
                 logger.info(f"Successfully parsed JSON response from container {container_name}")
