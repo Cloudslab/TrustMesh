@@ -161,7 +161,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             # Create new aggregation round - use consensus to elect aggregator
             aggregator_node = self.loop.run_until_complete(self._select_aggregator())
             global_round_number = self._get_next_global_round_number(context, workflow_id)
-            aggregation_id = f"{workflow_id}_agg_{global_round_number}_{int(time.time())}"
+            aggregation_id = f"{workflow_id}_agg_{global_round_number}"
             
             logger.info(f"Creating new aggregation round {aggregation_id} (global round {global_round_number}) with aggregator {aggregator_node}")
             
