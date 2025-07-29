@@ -161,7 +161,8 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             # Create new aggregation round - use consensus to elect aggregator
             aggregator_node = self.loop.run_until_complete(self._select_aggregator())
             global_round_number = self._get_next_global_round_number(context, workflow_id)
-            aggregation_id = f"{workflow_id}_agg_{global_round_number}"
+            # Use deterministic aggregation ID based on workflow and global round only
+            aggregation_id = self._make_deterministic_aggregation_id(workflow_id, global_round_number)
             
             logger.info(f"Creating new aggregation round {aggregation_id} (global round {global_round_number}) with aggregator {aggregator_node}")
             
@@ -411,9 +412,17 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 logger.error("Redis connection not initialized")
                 raise InvalidTransaction("Redis connection not initialized")
 
+            # Get all resource keys first, then sort for deterministic order
+            resource_keys = []
+            async for key in self.redis.scan_iter(match='resources_*'):
+                resource_keys.append(key)
+            
+            # Sort keys to ensure deterministic order across validators
+            resource_keys.sort()
+            
             node_resources = []
             logger.info("Scanning Redis for resource data")
-            async for key in self.redis.scan_iter(match='resources_*'):
+            for key in resource_keys:
                 node_id = key.split('_', 1)[1]
                 logger.debug(f"Fetching data for node: {node_id}")
                 redis_data = await self.redis.get(key)
@@ -430,7 +439,8 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 raise InvalidTransaction("No resource data available")
 
             logger.info("Selecting node with most available resources as aggregator")
-            selected_node = max(node_resources, key=lambda x: self._calculate_available_resources(x['resources']))
+            # Sort by node_id for deterministic tie-breaking when resources are equal
+            selected_node = max(node_resources, key=lambda x: (self._calculate_available_resources(x['resources']), x['id']))
             logger.info(f"Selected aggregator node: {selected_node['id']}")
             return selected_node['id']
         except RedisError as e:
@@ -460,6 +470,11 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         prefix_key = f"{workflow_id}_agg"
         return AGGREGATION_NAMESPACE + hashlib.sha512(prefix_key.encode()).hexdigest()[:64]
 
+    @staticmethod
+    def _make_deterministic_aggregation_id(workflow_id, global_round_number):
+        """Generate deterministic aggregation ID that will be identical across all validators"""
+        return f"{workflow_id}_agg_{global_round_number}"
+    
     @staticmethod
     def _make_workflow_address(workflow_id):
         """Generate blockchain address for workflow data"""
