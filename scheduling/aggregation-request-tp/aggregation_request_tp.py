@@ -139,10 +139,10 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         
         logger.info(f"Aggregation request - Workflow: {workflow_id}, Node: {node_id}, IoT Round: {iot_round_number} (ignored)")
 
-        # Validate workflow exists and is federated
-        if not self._validate_federated_workflow(context, workflow_id):
-            logger.error(f"Invalid or non-federated workflow ID: {workflow_id}")
-            raise InvalidTransaction(f"Invalid or non-federated workflow ID: {workflow_id}")
+        # Validate workflow exists (any valid TrustMesh workflow can support aggregation)
+        if not self._validate_workflow_exists(context, workflow_id):
+            logger.error(f"Invalid workflow ID: {workflow_id}")
+            raise InvalidTransaction(f"Invalid workflow ID: {workflow_id}")
 
         # Check for existing aggregation round (use workflow_id only, ignore IoT round numbers)
         existing_round = self._get_existing_aggregation_round(context, workflow_id)
@@ -188,23 +188,19 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         
         logger.info(f"Aggregation request processed for node {node_id} in global round {global_round_number}")
 
-    def _validate_federated_workflow(self, context, workflow_id):
-        """Validate that the workflow exists and is configured for federated learning"""
+    def _validate_workflow_exists(self, context, workflow_id):
+        """Validate that the workflow exists (any TrustMesh workflow can support aggregation)"""
         try:
             address = self._make_workflow_address(workflow_id)
             state_entries = context.get_state([address])
             if state_entries:
                 workflow_data = json.loads(state_entries[0].data.decode())
-                dependency_graph = workflow_data.get('dependency_graph', {})
-                workflow_type = dependency_graph.get('workflow_type', 'standard')
-                federated_config = dependency_graph.get('federated_config', {})
-                
-                is_federated = workflow_type == 'federated_learning' or bool(federated_config)
-                logger.info(f"Workflow {workflow_id} is federated: {is_federated}")
-                return is_federated
+                logger.info(f"Workflow {workflow_id} exists and can support aggregation")
+                return True
+            logger.warning(f"Workflow {workflow_id} not found in blockchain state")
             return False
         except Exception as e:
-            logger.error(f"Error validating federated workflow: {e}")
+            logger.error(f"Error validating workflow existence: {e}")
             return False
 
     def _get_existing_aggregation_round(self, context, workflow_id):
