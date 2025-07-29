@@ -43,8 +43,10 @@ REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
 # Sawtooth configuration
 FAMILY_NAME = 'aggregation-confirmation'
 FAMILY_VERSION = '1.0'
-AGGREGATION_NAMESPACE = hashlib.sha512('aggregation-request'.encode()).hexdigest()[:6]
+# Both TPs must use the same namespace for the aggregation state they both access
+AGGREGATION_REQUEST_NAMESPACE = hashlib.sha512('aggregation-request'.encode()).hexdigest()[:6]
 CONFIRMATION_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
+WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 
 # Validation configuration
 VALIDATION_SEED = 42  # Fixed seed for deterministic validation
@@ -103,7 +105,8 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
 
     @property
     def namespaces(self):
-        return [CONFIRMATION_NAMESPACE, AGGREGATION_NAMESPACE]
+        # Must include all namespaces that this TP reads/writes to force serial execution
+        return [CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE, WORKFLOW_NAMESPACE]
 
     def _initialize_redis(self):
         logger.info("Starting Redis initialization")
@@ -229,8 +232,16 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             logger.debug(f"Transaction payload: {transaction.payload}")
             payload = json.loads(transaction.payload.decode())
             logger.info(f"Decoded payload: {payload}")
-
-            self._handle_aggregation_confirmation(payload, context)
+            
+            # Check if this is a status update or aggregation confirmation
+            action = payload.get('action', 'confirm')
+            
+            if action == 'lock':
+                self._handle_status_update(payload, context)
+            elif action == 'confirm':
+                self._handle_aggregation_confirmation(payload, context)
+            else:
+                raise InvalidTransaction(f"Unknown action: {action}")
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {str(e)}")
@@ -284,7 +295,6 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             'aggregated_weights': verified_weights,
             'participating_nodes': participating_nodes,
             'validation_result': validation_result,
-            'confirmation_time': time.time(),
             'status': 'confirmed',
             'workflow_id': aggregation_data['workflow_id'],
             'global_round_number': aggregation_data.get('global_round_number', aggregation_data.get('round_number', 1))  # Use global round
@@ -579,8 +589,63 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 'details': {'error': str(e)}
             }
 
+    def _handle_status_update(self, payload, context):
+        """Handle aggregation round status updates (lock round)"""
+        logger.info("Entering _handle_status_update method")
+        
+        aggregation_id = payload['aggregation_id']
+        new_status = payload['new_status']
+        workflow_id = payload['workflow_id']
+        global_round_number = payload['global_round_number']
+        
+        logger.info(f"Status update - Aggregation: {aggregation_id}, New Status: {new_status}")
+        
+        # Get current aggregation round data
+        aggregation_address = self._make_aggregation_address(aggregation_id)
+        state_entries = context.get_state([aggregation_address])
+        
+        if not state_entries:
+            logger.error(f"Aggregation round {aggregation_id} not found")
+            raise InvalidTransaction(f"Aggregation round {aggregation_id} not found")
+        
+        round_data = json.loads(state_entries[0].data.decode())
+        
+        # Validate status transition
+        current_status = round_data.get('status', 'unknown')
+        valid_transitions = {
+            'collecting': ['locked', 'failed'],
+            'locked': ['confirmed', 'failed'],
+            'confirmed': [],  # Terminal state
+            'failed': []      # Terminal state
+        }
+        
+        if new_status not in valid_transitions.get(current_status, []):
+            raise InvalidTransaction(f"Invalid status transition from {current_status} to {new_status}")
+        
+        # Update status
+        round_data['status'] = new_status
+        
+        # Store updated data
+        context.set_state({
+            aggregation_address: json.dumps(round_data).encode()
+        })
+        
+        # Emit status update event
+        context.add_event(
+            event_type="aggregation-status-update",
+            attributes=[
+                ("aggregation_id", aggregation_id),
+                ("workflow_id", workflow_id),
+                ("global_round_number", str(global_round_number)),
+                ("old_status", current_status),
+                ("new_status", new_status)
+            ]
+        )
+        
+        logger.info(f"Status updated for {aggregation_id}: {current_status} → {new_status}")
+        
     def _update_aggregation_status(self, context, aggregation_id, status):
-        """Update the status of the aggregation request"""
+        """Update the status of the aggregation request (used internally)"""
         try:
             address = self._make_aggregation_address(aggregation_id)
             state_entries = context.get_state([address])
@@ -588,7 +653,6 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             if state_entries:
                 aggregation_data = json.loads(state_entries[0].data.decode())
                 aggregation_data['status'] = status
-                aggregation_data['completed_time'] = time.time()
                 
                 context.set_state({
                     address: json.dumps(aggregation_data).encode()
@@ -606,7 +670,7 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
     @staticmethod
     def _make_aggregation_address(aggregation_id):
         """Generate blockchain address for aggregation request"""
-        return AGGREGATION_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
+        return AGGREGATION_REQUEST_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
 
     def _check_mnist_validation_performance(self, aggregated_weights: Dict) -> Dict:
         """Check model performance on distributed MNIST validation dataset"""

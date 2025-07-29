@@ -29,6 +29,8 @@ STATUS_NAMESPACE = hashlib.sha512(STATUS_FAMILY_NAME.encode()).hexdigest()[:6]
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 DOCKER_IMAGE_NAMESPACE = hashlib.sha512('docker-image'.encode()).hexdigest()[:6]
 AGGREGATION_NAMESPACE = hashlib.sha512(AGGREGATION_REQUEST_FAMILY_NAME.encode()).hexdigest()[:6]
+# Include confirmation namespace to ensure serial execution with aggregation-confirmation-tp
+CONFIRMATION_NAMESPACE = hashlib.sha512('aggregation-confirmation'.encode()).hexdigest()[:6]
 
 PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/client.priv')
 # Get comma-separated list of validator URLs from environment variable
@@ -267,8 +269,9 @@ class TransactionCreator:
             if round_number is not None:
                 aggregation_payload["round_number"] = round_number
             
-            aggregation_inputs = [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE]
-            aggregation_outputs = [AGGREGATION_NAMESPACE]
+            # Include all namespaces that aggregation TPs declare to force serial execution
+            aggregation_inputs = [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE, CONFIRMATION_NAMESPACE]
+            aggregation_outputs = [AGGREGATION_NAMESPACE, CONFIRMATION_NAMESPACE]
             
             aggregation_txn = create_transaction(
                 self.signer, 

@@ -25,8 +25,11 @@ REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
 # Sawtooth configuration
 FAMILY_NAME = 'aggregation-request'
 FAMILY_VERSION = '1.0'
+# This namespace is shared with aggregation-confirmation-tp to force serial execution
 AGGREGATION_NAMESPACE = hashlib.sha512(FAMILY_NAME.encode()).hexdigest()[:6]
 WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
+# Also include confirmation namespace to ensure serialization
+CONFIRMATION_NAMESPACE = hashlib.sha512('aggregation-confirmation'.encode()).hexdigest()[:6]
 
 # Federated learning configuration
 AGGREGATION_TIMEOUT = int(os.getenv('AGGREGATION_TIMEOUT', '180'))  # 3 minutes default
@@ -51,7 +54,8 @@ class AggregationRequestTransactionHandler(TransactionHandler):
 
     @property
     def namespaces(self):
-        return [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE]
+        # Must include all namespaces to force serial execution with aggregation-confirmation-tp
+        return [AGGREGATION_NAMESPACE, WORKFLOW_NAMESPACE, CONFIRMATION_NAMESPACE]
 
     def _initialize_redis(self):
         logger.info("Starting Redis initialization")
@@ -233,20 +237,12 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 
             round_data = json.loads(round_entries[0].data.decode())
             
-            # Check if the round is still collecting
+            # Check if the round is still collecting (not locked or confirmed)
             if round_data.get('status') == 'collecting':
-                # Check if round has expired
-                current_time = time.time()
-                deadline = round_data.get('collection_deadline', current_time + 1)
-                
-                if current_time > deadline:
-                    logger.info(f"Aggregation round {active_aggregation_id} has expired")
-                    return None
-                
                 logger.info(f"Found existing active aggregation round: {round_data['aggregation_id']} (global round {round_data.get('global_round_number', 'unknown')})")
                 return round_data
             else:
-                logger.info(f"Aggregation round {active_aggregation_id} has status: {round_data.get('status')}")
+                logger.info(f"Aggregation round {active_aggregation_id} has status: {round_data.get('status')} - creating new round")
                 return None
                 
         except Exception as e:
@@ -265,18 +261,15 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'aggregator_node': aggregator_node,
                 'status': 'collecting',
-                'created_time': time.time(),
-                'collection_deadline': time.time() + AGGREGATION_TIMEOUT,
                 'participating_nodes': [initial_node_id],
                 'node_contributions': {
                     initial_node_id: {
                         'model_weights': initial_weights,
-                        'timestamp': time.time(),
                         'metadata': initial_payload.get('metadata', {})
                     }
                 },
                 'min_nodes_required': MIN_NODES_FOR_AGGREGATION,
-                'expected_nodes': self._get_expected_nodes_for_workflow(workflow_id)
+                'expected_nodes': []  # Time-based aggregation - any number of nodes can participate
             }
             
             # Store the aggregation round data
@@ -288,8 +281,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             active_round_address = self._make_active_round_address(workflow_id)
             active_round_data = {
                 'workflow_id': workflow_id,
-                'aggregation_id': aggregation_id,
-                'created_time': time.time()
+                'aggregation_id': aggregation_id
             }
             context.set_state({
                 active_round_address: json.dumps(active_round_data).encode()
@@ -325,7 +317,6 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             round_data['participating_nodes'].append(node_id)
             round_data['node_contributions'][node_id] = {
                 'model_weights': model_weights,
-                'timestamp': time.time(),
                 'metadata': payload.get('metadata', {})
             }
             
@@ -341,10 +332,6 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             logger.error(f"Error adding node to aggregation round: {e}")
             raise InvalidTransaction(f"Failed to add node to aggregation round: {e}")
 
-    def _get_expected_nodes_for_workflow(self, workflow_id):
-        """Get expected nodes for federated workflow"""
-        # For MNIST federated learning, we expect 5 IoT nodes
-        return [f"iot-{i}" for i in range(5)]
 
     def _get_next_global_round_number(self, context, workflow_id):
         """Get the next global round number for this workflow"""
@@ -363,8 +350,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             # Update the global round counter
             counter_data = {
                 'workflow_id': workflow_id,
-                'current_global_round': next_round,
-                'last_updated': time.time()
+                'current_global_round': next_round
             }
             
             context.set_state({

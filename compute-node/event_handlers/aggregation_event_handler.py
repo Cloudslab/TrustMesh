@@ -27,8 +27,10 @@ from coredis import RedisCluster
 # Family configurations
 AGGREGATION_REQUEST_FAMILY_NAME = 'aggregation-request'
 AGGREGATION_CONFIRMATION_FAMILY_NAME = 'aggregation-confirmation'
+# Namespace constants - must match the TPs exactly
 AGGREGATION_REQUEST_NAMESPACE = hashlib.sha512(AGGREGATION_REQUEST_FAMILY_NAME.encode()).hexdigest()[:6]
 AGGREGATION_CONFIRMATION_NAMESPACE = hashlib.sha512(AGGREGATION_CONFIRMATION_FAMILY_NAME.encode()).hexdigest()[:6]
+WORKFLOW_NAMESPACE = hashlib.sha512('workflow-dependency'.encode()).hexdigest()[:6]
 
 # Redis configuration
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
@@ -135,41 +137,43 @@ class FederatedAggregator:
                 'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'expected_nodes': expected_nodes,
                 'collected_weights': {},
-                'start_time': time.time(),
-                'deadline': time.time() + AGGREGATION_TIMEOUT
+                'start_time': time.time()
             }
             
-            # Wait for collection period or until minimum nodes reached
-            await self._wait_for_collection_completion(aggregation_id)
+            # Start collection timer
+            asyncio.create_task(self._collection_timer(aggregation_id))
             
         except Exception as e:
             logger.error(f"Error in aggregation collection: {e}")
             raise
 
-    async def _wait_for_collection_completion(self, aggregation_id: str):
-        """Wait for aggregation collection to complete"""
-        aggregation_info = self.pending_aggregations[aggregation_id]
-        
-        while time.time() < aggregation_info['deadline']:
-            # Check if we have enough contributions
+    async def _collection_timer(self, aggregation_id: str):
+        """Timer that expires after AGGREGATION_TIMEOUT and locks the round"""
+        try:
+            # Wait for the timeout period
+            await asyncio.sleep(AGGREGATION_TIMEOUT)
+            
+            # Check if aggregation is still pending
+            if aggregation_id not in self.pending_aggregations:
+                logger.info(f"Aggregation {aggregation_id} already completed or failed")
+                return
+                
+            aggregation_info = self.pending_aggregations[aggregation_id]
             collected_count = len(aggregation_info['collected_weights'])
             
             if collected_count >= MIN_NODES_FOR_AGGREGATION:
-                logger.info(f"Minimum nodes reached ({collected_count}), starting aggregation")
+                logger.info(f"Timer expired for {aggregation_id} with {collected_count} nodes - locking round")
+                # Step 1: Lock the round to prevent new nodes from joining
+                await self._lock_aggregation_round(aggregation_id)
+                # Step 2: Perform aggregation
                 await self._perform_aggregation(aggregation_id)
-                return
-            
-            # Wait and check again
-            await asyncio.sleep(5.0)
-        
-        # Timeout reached
-        collected_count = len(aggregation_info['collected_weights'])
-        if collected_count >= MIN_NODES_FOR_AGGREGATION:
-            logger.info(f"Timeout reached, but have {collected_count} nodes, proceeding with aggregation")
-            await self._perform_aggregation(aggregation_id)
-        else:
-            logger.error(f"Aggregation timeout with insufficient nodes: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
-            await self._handle_aggregation_failure(aggregation_id, "insufficient_nodes")
+            else:
+                logger.error(f"Timer expired for {aggregation_id} with insufficient nodes: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
+                await self._handle_aggregation_failure(aggregation_id, "insufficient_nodes")
+                
+        except Exception as e:
+            logger.error(f"Error in collection timer for {aggregation_id}: {e}")
+            await self._handle_aggregation_failure(aggregation_id, str(e))
 
     def add_node_contribution(self, aggregation_id: str, node_id: str, model_weights: Dict):
         """Add a node's model weights to the aggregation"""
@@ -183,8 +187,37 @@ class FederatedAggregator:
         else:
             logger.warning(f"Received contribution for unknown aggregation {aggregation_id}")
 
+    async def _lock_aggregation_round(self, aggregation_id: str):
+        """Lock the aggregation round to prevent new nodes from joining"""
+        try:
+            logger.info(f"Locking aggregation round {aggregation_id}")
+            
+            aggregation_info = self.pending_aggregations[aggregation_id]
+            
+            # Submit status update transaction to lock the round
+            payload = {
+                'aggregation_id': aggregation_id,
+                'new_status': 'locked',
+                'workflow_id': aggregation_info['workflow_id'],
+                'global_round_number': aggregation_info['global_round_number']
+            }
+            
+            # Create and submit status update transaction
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self._create_and_submit_status_update_transaction, payload)
+                result = future.result()
+                
+                if result.get('status') == 'SUCCESS':
+                    logger.info(f"Successfully locked aggregation round {aggregation_id}")
+                else:
+                    raise Exception(f"Failed to lock round: {result.get('message')}")
+                    
+        except Exception as e:
+            logger.error(f"Error locking aggregation round {aggregation_id}: {e}")
+            raise
+
     async def _perform_aggregation(self, aggregation_id: str):
-        """Perform FedAvg aggregation"""
+        """Perform FedAvg aggregation after round is locked"""
         try:
             logger.info(f"Performing FedAvg aggregation for {aggregation_id}")
             
@@ -198,7 +231,7 @@ class FederatedAggregator:
             # Store aggregated weights before submitting confirmation
             aggregation_info['aggregated_weights'] = aggregated_weights
             
-            # Submit aggregation confirmation transaction
+            # Submit aggregation confirmation transaction (this will set status to 'confirmed')
             await self._submit_aggregation_confirmation(
                 aggregation_id,
                 aggregated_weights,
@@ -280,15 +313,47 @@ class FederatedAggregator:
             logger.error(f"Error submitting aggregation confirmation: {e}")
             raise
 
+    def _create_and_submit_status_update_transaction(self, payload: Dict) -> Dict:
+        """Create and submit status update transaction using aggregation-confirmation-tp"""
+        try:
+            # Add action field to specify this is a lock operation
+            lock_payload = {
+                **payload,
+                'action': 'lock'
+            }
+            
+            # Use aggregation-confirmation transaction processor for status updates
+            # Include all namespaces that both TPs declare to ensure proper serialization
+            status_txn = create_transaction(
+                AGGREGATION_CONFIRMATION_FAMILY_NAME,
+                '1.0',
+                lock_payload,
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE, WORKFLOW_NAMESPACE],
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE, WORKFLOW_NAMESPACE]
+            )
+            
+            batch = create_batch([status_txn])
+            return submit_batch(batch)
+            
+        except Exception as e:
+            logger.error(f"Error creating status update transaction: {e}")
+            raise
+    
     def _create_and_submit_confirmation_transaction(self, payload: Dict) -> Dict:
         """Create and submit aggregation confirmation transaction"""
         try:
+            # Add action field to specify this is a confirmation operation
+            confirmation_payload = {
+                **payload,
+                'action': 'confirm'
+            }
+            
             confirmation_txn = create_transaction(
                 AGGREGATION_CONFIRMATION_FAMILY_NAME,
                 '1.0',
-                payload,
-                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE],
-                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE]
+                confirmation_payload,
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE, WORKFLOW_NAMESPACE],
+                [AGGREGATION_CONFIRMATION_NAMESPACE, AGGREGATION_REQUEST_NAMESPACE, WORKFLOW_NAMESPACE]
             )
             
             batch = create_batch([confirmation_txn])
@@ -460,7 +525,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 participating_nodes = json.loads(attr.value)
         
         # If this node was the aggregator, get the aggregated weights and broadcast with validation metrics
-        if aggregator_node == node_id and aggregation_id in aggregator.pending_aggregations:
+        if aggregator_node == aggregator.node_id and aggregation_id in aggregator.pending_aggregations:
             logger.info(f"Broadcasting confirmed aggregation {aggregation_id} with validation score {validation_score}")
             aggregation_info = aggregator.pending_aggregations[aggregation_id]
             
