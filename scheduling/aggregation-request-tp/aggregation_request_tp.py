@@ -206,23 +206,48 @@ class AggregationRequestTransactionHandler(TransactionHandler):
     def _get_existing_aggregation_round(self, context, workflow_id):
         """Check if an aggregation round already exists for this workflow (ignore IoT round numbers)"""
         try:
-            # Search for existing aggregation rounds for this workflow that are still collecting
-            address_prefix = self._make_aggregation_address_prefix(workflow_id)
-            state_entries = context.get_state([address_prefix])
+            # Get the current active aggregation round ID for this workflow
+            active_round_address = self._make_active_round_address(workflow_id)
+            state_entries = context.get_state([active_round_address])
             
-            for entry in state_entries:
-                try:
-                    round_data = json.loads(entry.data.decode())
-                    if (round_data.get('workflow_id') == workflow_id and 
-                        round_data.get('status') == 'collecting'):
-                        
-                        logger.info(f"Found existing aggregation round: {round_data['aggregation_id']} (global round {round_data.get('global_round_number', 'unknown')})")
-                        return round_data
-                except Exception as e:
-                    logger.warning(f"Error parsing aggregation round data: {e}")
-                    continue
+            if not state_entries:
+                logger.info(f"No active aggregation round found for workflow {workflow_id}")
+                return None
             
-            return None
+            # Get the aggregation ID from the active round tracker
+            active_round_data = json.loads(state_entries[0].data.decode())
+            active_aggregation_id = active_round_data.get('aggregation_id')
+            
+            if not active_aggregation_id:
+                logger.warning(f"Active round tracker exists but no aggregation_id found")
+                return None
+                
+            # Now get the actual aggregation round data
+            aggregation_address = self._make_aggregation_address(active_aggregation_id)
+            round_entries = context.get_state([aggregation_address])
+            
+            if not round_entries:
+                logger.warning(f"Active round {active_aggregation_id} not found in state")
+                return None
+                
+            round_data = json.loads(round_entries[0].data.decode())
+            
+            # Check if the round is still collecting
+            if round_data.get('status') == 'collecting':
+                # Check if round has expired
+                current_time = time.time()
+                deadline = round_data.get('collection_deadline', current_time + 1)
+                
+                if current_time > deadline:
+                    logger.info(f"Aggregation round {active_aggregation_id} has expired")
+                    return None
+                
+                logger.info(f"Found existing active aggregation round: {round_data['aggregation_id']} (global round {round_data.get('global_round_number', 'unknown')})")
+                return round_data
+            else:
+                logger.info(f"Aggregation round {active_aggregation_id} has status: {round_data.get('status')}")
+                return None
+                
         except Exception as e:
             logger.error(f"Error checking for existing aggregation round: {e}")
             return None
@@ -253,8 +278,20 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 'expected_nodes': self._get_expected_nodes_for_workflow(workflow_id)
             }
             
+            # Store the aggregation round data
             context.set_state({
                 address: json.dumps(round_data).encode()
+            })
+            
+            # Also store this as the active round for the workflow
+            active_round_address = self._make_active_round_address(workflow_id)
+            active_round_data = {
+                'workflow_id': workflow_id,
+                'aggregation_id': aggregation_id,
+                'created_time': time.time()
+            }
+            context.set_state({
+                active_round_address: json.dumps(active_round_data).encode()
             })
             
             logger.info(f"Created aggregation round {aggregation_id} for workflow {workflow_id} (global round {global_round_number})")
@@ -359,6 +396,12 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         """Generate blockchain address for global round counter"""
         counter_key = f"{workflow_id}_global_round_counter"
         return AGGREGATION_NAMESPACE + hashlib.sha512(counter_key.encode()).hexdigest()[:64]
+    
+    @staticmethod
+    def _make_active_round_address(workflow_id):
+        """Generate blockchain address for active aggregation round tracker"""
+        active_key = f"{workflow_id}_active_round"
+        return AGGREGATION_NAMESPACE + hashlib.sha512(active_key.encode()).hexdigest()[:64]
 
     async def _select_aggregator(self):
         """Select aggregator node using deterministic algorithm with consensus"""
