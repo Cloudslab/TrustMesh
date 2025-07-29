@@ -114,9 +114,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
     def apply(self, transaction, context):
         logger.info("Entering apply method for aggregation request")
         try:
-            logger.debug(f"Transaction payload: {transaction.payload}")
             payload = json.loads(transaction.payload.decode())
-            logger.info(f"Decoded payload: {payload}")
 
             self._handle_aggregation_request(payload, context)
 
