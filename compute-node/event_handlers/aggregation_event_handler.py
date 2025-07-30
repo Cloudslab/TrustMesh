@@ -137,7 +137,14 @@ class FederatedAggregator:
                                          global_round_number: int, expected_nodes: List[str]):
         """Start collecting model weights from participating nodes"""
         try:
-            logger.info(f"Starting aggregation collection for {aggregation_id} (global round {global_round_number})")
+            start_time = time.time()
+            deadline = start_time + AGGREGATION_TIMEOUT
+            logger.info(f"🔄 AGGREGATION STARTED - ID: {aggregation_id}")
+            logger.info(f"  └─ Workflow: {workflow_id}")
+            logger.info(f"  └─ Global Round: {global_round_number}")
+            logger.info(f"  └─ Timer Duration: {AGGREGATION_TIMEOUT}s")
+            logger.info(f"  └─ Deadline: {time.strftime('%H:%M:%S', time.localtime(deadline))}")
+            logger.info(f"  └─ Expected Nodes: {expected_nodes}")
             
             # Store aggregation metadata
             self.pending_aggregations[aggregation_id] = {
@@ -145,60 +152,91 @@ class FederatedAggregator:
                 'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'expected_nodes': expected_nodes,
                 'collected_weights': {},
-                'start_time': time.time()
+                'start_time': start_time
             }
             
             # Start collection timer
+            logger.info(f"⏱️  Starting {AGGREGATION_TIMEOUT}s timer for {aggregation_id}")
             asyncio.create_task(self._collection_timer(aggregation_id))
             
         except Exception as e:
-            logger.error(f"Error in aggregation collection: {e}")
+            logger.error(f"❌ Error in aggregation collection: {e}")
             raise
 
     async def _collection_timer(self, aggregation_id: str):
         """Timer that expires after AGGREGATION_TIMEOUT and locks the round"""
         try:
-            # Wait for the timeout period
-            await asyncio.sleep(AGGREGATION_TIMEOUT)
+            logger.info(f"⏱️  Timer started for {aggregation_id} - waiting {AGGREGATION_TIMEOUT}s")
+            start_wait = time.time()
+            
+            # Log countdown at intervals
+            for i in range(0, AGGREGATION_TIMEOUT, 10):
+                if aggregation_id not in self.pending_aggregations:
+                    logger.info(f"⏹️  Timer cancelled - aggregation {aggregation_id} no longer pending")
+                    return
+                    
+                remaining = AGGREGATION_TIMEOUT - i
+                if remaining > 10:
+                    logger.info(f"⏳ Timer update - {remaining}s remaining for {aggregation_id}")
+                    await asyncio.sleep(10)
+                else:
+                    await asyncio.sleep(remaining)
+                    break
+            
+            elapsed = time.time() - start_wait
+            logger.info(f"⏰ TIMER EXPIRED for {aggregation_id} after {elapsed:.1f}s")
             
             # Check if aggregation is still pending
             if aggregation_id not in self.pending_aggregations:
-                logger.info(f"Aggregation {aggregation_id} already completed or failed")
+                logger.info(f"⏹️  Aggregation {aggregation_id} already completed or failed")
                 return
                 
             aggregation_info = self.pending_aggregations[aggregation_id]
             collected_count = len(aggregation_info['collected_weights'])
+            nodes_collected = list(aggregation_info['collected_weights'].keys())
+            
+            logger.info(f"📊 Timer Expiry Status for {aggregation_id}:")
+            logger.info(f"  └─ Nodes Collected: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
+            logger.info(f"  └─ Participating Nodes: {nodes_collected}")
             
             if collected_count >= MIN_NODES_FOR_AGGREGATION:
-                logger.info(f"Timer expired for {aggregation_id} with {collected_count} nodes - locking round")
+                logger.info(f"✅ Sufficient nodes collected - proceeding to lock round")
                 # Step 1: Lock the round to prevent new nodes from joining
                 await self._lock_aggregation_round(aggregation_id)
                 # Step 2: Perform aggregation
                 await self._perform_aggregation(aggregation_id)
             else:
-                logger.error(f"Timer expired for {aggregation_id} with insufficient nodes: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
+                logger.error(f"❌ Insufficient nodes collected: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
                 await self._handle_aggregation_failure(aggregation_id, "insufficient_nodes")
                 
         except Exception as e:
-            logger.error(f"Error in collection timer for {aggregation_id}: {e}")
+            logger.error(f"❌ Error in collection timer for {aggregation_id}: {e}")
             await self._handle_aggregation_failure(aggregation_id, str(e))
 
     def add_node_contribution(self, aggregation_id: str, node_id: str, model_weights: Dict):
         """Add a node's model weights to the aggregation"""
         if aggregation_id in self.pending_aggregations:
-            self.pending_aggregations[aggregation_id]['collected_weights'][node_id] = model_weights
+            aggregation_info = self.pending_aggregations[aggregation_id]
+            aggregation_info['collected_weights'][node_id] = model_weights
             
-            collected_count = len(self.pending_aggregations[aggregation_id]['collected_weights'])
-            expected_count = len(self.pending_aggregations[aggregation_id]['expected_nodes'])
+            collected_count = len(aggregation_info['collected_weights'])
+            expected_count = len(aggregation_info['expected_nodes'])
+            elapsed = time.time() - aggregation_info['start_time']
+            remaining = max(0, AGGREGATION_TIMEOUT - elapsed)
             
-            logger.info(f"Added contribution from {node_id} to {aggregation_id} ({collected_count}/{expected_count})")
+            logger.info(f"📥 Added contribution from {node_id} to {aggregation_id}")
+            logger.info(f"📊 Collection Status:")
+            logger.info(f"  └─ Total Contributions: {collected_count}/{expected_count}")
+            logger.info(f"  └─ Nodes: {list(aggregation_info['collected_weights'].keys())}")
+            logger.info(f"  └─ Time Elapsed: {elapsed:.1f}s")
+            logger.info(f"  └─ Time Remaining: {remaining:.1f}s")
         else:
-            logger.warning(f"Received contribution for unknown aggregation {aggregation_id}")
+            logger.warning(f"⚠️  Received contribution for unknown aggregation {aggregation_id}")
 
     async def _lock_aggregation_round(self, aggregation_id: str):
         """Lock the aggregation round to prevent new nodes from joining"""
         try:
-            logger.info(f"Locking aggregation round {aggregation_id}")
+            logger.info(f"🔒 LOCKING aggregation round {aggregation_id}")
             
             aggregation_info = self.pending_aggregations[aggregation_id]
             
@@ -210,34 +248,45 @@ class FederatedAggregator:
                 'global_round_number': aggregation_info['global_round_number']
             }
             
+            logger.info(f"📤 Submitting lock transaction for {aggregation_id}")
+            
             # Create and submit status update transaction
             with ThreadPoolExecutor() as executor:
                 future = executor.submit(self._create_and_submit_status_update_transaction, payload)
                 result = future.result()
                 
                 if result.get('status') == 'SUCCESS':
-                    logger.info(f"Successfully locked aggregation round {aggregation_id}")
+                    logger.info(f"✅ Successfully locked aggregation round {aggregation_id}")
+                    logger.info(f"  └─ Status: collecting → locked")
                 else:
+                    logger.error(f"❌ Failed to lock round: {result.get('message')}")
                     raise Exception(f"Failed to lock round: {result.get('message')}")
                     
         except Exception as e:
-            logger.error(f"Error locking aggregation round {aggregation_id}: {e}")
+            logger.error(f"❌ Error locking aggregation round {aggregation_id}: {e}")
             raise
 
     async def _perform_aggregation(self, aggregation_id: str):
         """Perform FedAvg aggregation after round is locked"""
         try:
-            logger.info(f"Performing FedAvg aggregation for {aggregation_id}")
+            logger.info(f"🧮 PERFORMING FedAvg aggregation for {aggregation_id}")
             
             aggregation_info = self.pending_aggregations[aggregation_id]
             node_weights = aggregation_info['collected_weights']
             participating_nodes = list(node_weights.keys())
             
+            logger.info(f"📊 Aggregation Details:")
+            logger.info(f"  └─ Participating Nodes: {participating_nodes}")
+            logger.info(f"  └─ Node Count: {len(participating_nodes)}")
+            
             # Compute FedAvg
+            logger.info(f"🔧 Computing FedAvg with {len(participating_nodes)} nodes")
             aggregated_weights = self._compute_fedavg(node_weights, participating_nodes)
             
             # Store aggregated weights before submitting confirmation
             aggregation_info['aggregated_weights'] = aggregated_weights
+            
+            logger.info(f"📤 Submitting aggregation confirmation transaction")
             
             # Submit aggregation confirmation transaction (this will set status to 'confirmed')
             await self._submit_aggregation_confirmation(
@@ -250,10 +299,11 @@ class FederatedAggregator:
             
             # Don't clean up yet - wait for confirmation event to broadcast
             
-            logger.info(f"Successfully completed aggregation {aggregation_id}")
+            logger.info(f"✅ Successfully completed aggregation {aggregation_id}")
+            logger.info(f"  └─ Status: locked → confirmed (pending)")
             
         except Exception as e:
-            logger.error(f"Error performing aggregation: {e}")
+            logger.error(f"❌ Error performing aggregation: {e}")
             await self._handle_aggregation_failure(aggregation_id, str(e))
 
     def _compute_fedavg(self, node_weights: Dict[str, Dict], participating_nodes: List[str]) -> Dict:
@@ -496,7 +546,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 aggregator_node = attr.value
         
         if aggregator_node == aggregator.node_id:
-            logger.info(f"This node ({aggregator.node_id}) is assigned as aggregator for {aggregation_id}")
+            logger.info(f"🎯 This node ({aggregator.node_id}) is assigned as aggregator for {aggregation_id}")
             
             # Get expected nodes from environment or default
             expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
@@ -511,9 +561,20 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                     ), loop
                 )
             except Exception as e:
-                logger.error(f"Error scheduling aggregation collection: {e}")
+                logger.error(f"❌ Error scheduling aggregation collection: {e}")
         else:
-            logger.info(f"Aggregation {aggregation_id} assigned to different node: {aggregator_node}")
+            # This node received the event but is not the aggregator
+            # Check if this is a subsequent contribution from another IoT node
+            logger.info(f"📢 Received aggregation event for {aggregation_id}")
+            logger.info(f"  └─ Aggregator: {aggregator_node} (not this node)")
+            logger.info(f"  └─ Node ID: {node_id}")
+            logger.info(f"  └─ Global Round: {global_round_number}")
+            
+            # If we are the aggregator for this aggregation, add the contribution
+            if aggregation_id in aggregator.pending_aggregations:
+                logger.info(f"  └─ This is a subsequent contribution - adding to collection")
+                # Note: The actual weights need to be retrieved from blockchain state
+                # This is just the event notification
             
     elif event.event_type == "aggregation-confirmation":
         logger.info("Aggregation Event Handler: aggregation-confirmation event")
