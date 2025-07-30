@@ -123,6 +123,14 @@ class FederatedAggregator:
         self.redis = redis_client
         self.pending_aggregations = {}
         
+        # Create a dedicated event loop for this aggregator if one doesn't exist
+        try:
+            self.loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # No event loop in current thread, create a new one
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+        
         logger.info(f"Initialized FederatedAggregator for node {node_id}")
 
     async def start_aggregation_collection(self, aggregation_id: str, workflow_id: str, 
@@ -494,9 +502,16 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
             expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
             
             # Start aggregation collection asynchronously
-            asyncio.create_task(aggregator.start_aggregation_collection(
-                aggregation_id, workflow_id, global_round_number, expected_nodes
-            ))
+            # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
+            try:
+                loop = aggregator.loop
+                asyncio.run_coroutine_threadsafe(
+                    aggregator.start_aggregation_collection(
+                        aggregation_id, workflow_id, global_round_number, expected_nodes
+                    ), loop
+                )
+            except Exception as e:
+                logger.error(f"Error scheduling aggregation collection: {e}")
         else:
             logger.info(f"Aggregation {aggregation_id} assigned to different node: {aggregator_node}")
             
@@ -540,13 +555,20 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
             }
             
             # Broadcast with validation metrics
-            asyncio.create_task(aggregator._broadcast_aggregated_model(
-                aggregated_weights,
-                participating_nodes,
-                workflow_id,
-                global_round_number,
-                validation_metrics
-            ))
+            # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
+            try:
+                loop = aggregator.loop
+                asyncio.run_coroutine_threadsafe(
+                    aggregator._broadcast_aggregated_model(
+                        aggregated_weights,
+                        participating_nodes,
+                        workflow_id,
+                        global_round_number,
+                        validation_metrics
+                    ), loop
+                )
+            except Exception as e:
+                logger.error(f"Error scheduling broadcast: {e}")
         
     else:
         logger.info(f"Aggregation Event Handler: Unhandled event type: {event.event_type}")
@@ -627,6 +649,13 @@ def process_future_result(future_result):
 
 def main():
     logger.info("Starting Aggregation Event Handler")
+    
+    # Ensure we have an event loop for async operations
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
     
     # Initialize aggregator
     aggregator = FederatedAggregator(node_id, redis)
