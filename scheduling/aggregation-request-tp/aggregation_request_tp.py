@@ -45,7 +45,7 @@ CONFIRMATION_NAMESPACE = hashlib.sha512('aggregation-confirmation'.encode()).hex
 
 # Federated learning configuration
 AGGREGATION_TIMEOUT = int(os.getenv('AGGREGATION_TIMEOUT', '180'))  # 3 minutes default
-MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '3'))
+MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '1'))  # Minimum 1 node for aggregation
 
 logger = logging.getLogger(__name__)
 

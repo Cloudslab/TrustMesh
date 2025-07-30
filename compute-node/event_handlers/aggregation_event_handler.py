@@ -45,7 +45,7 @@ PRIVATE_KEY_FILE = os.getenv('SAWTOOTH_PRIVATE_KEY', '/root/.sawtooth/keys/root.
 
 # Aggregation configuration
 AGGREGATION_TIMEOUT = int(os.getenv('AGGREGATION_TIMEOUT', '180'))  # 3 minutes
-MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '3'))
+MIN_NODES_FOR_AGGREGATION = int(os.getenv('MIN_NODES_FOR_AGGREGATION', '1'))  # Minimum 1 node for aggregation
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,8 @@ class FederatedAggregator:
             logger.info(f"  └─ Nodes Collected: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
             logger.info(f"  └─ Participating Nodes: {participating_nodes}")
             
+            # Note: The first node that initiated the round is already counted in participating_nodes
+            
             if collected_count >= MIN_NODES_FOR_AGGREGATION:
                 logger.info(f"✅ Sufficient nodes collected - proceeding to lock round")
                 # Step 1: Lock the round to prevent new nodes from joining
@@ -231,7 +233,7 @@ class FederatedAggregator:
             
             request = ClientStateGetRequest(
                 state_root='',  # Use current state root
-                addresses=[aggregation_address]
+                address=aggregation_address  # Use singular 'address' field, not 'addresses'
             )
             
             # Send request to validator
@@ -548,20 +550,35 @@ class FederatedAggregator:
             await self._handle_aggregation_failure(aggregation_id, str(e))
 
     def _compute_fedavg(self, node_weights: Dict[str, Dict], participating_nodes: List[str]) -> Dict:
-        """Compute FedAvg aggregation"""
+        """Compute FedAvg aggregation
+        
+        Supports single-node aggregation: when only 1 node participates, 
+        weight_factor = 1.0, so the model weights are returned unchanged.
+        """
         logger.info(f"Computing FedAvg for {len(participating_nodes)} nodes")
+        
+        if not participating_nodes or not node_weights:
+            raise ValueError("No participating nodes or weights provided for aggregation")
         
         aggregated_weights = {}
         
         # Get first node's weights structure
         first_node = participating_nodes[0]
-        weight_structure = node_weights[first_node]
+        weight_structure = node_weights.get(first_node)
+        
+        if not weight_structure:
+            raise ValueError(f"No weights found for node {first_node}")
         
         # Initialize aggregated weights
         for layer_name in weight_structure:
             aggregated_weights[layer_name] = np.zeros_like(np.array(weight_structure[layer_name]))
         
         # Weighted averaging (equal weights for simplicity)
+        if len(participating_nodes) == 1:
+            logger.info("Single-node aggregation: returning model weights unchanged")
+        else:
+            logger.info(f"Multi-node aggregation: averaging across {len(participating_nodes)} nodes")
+            
         for node_id in participating_nodes:
             node_weight_dict = node_weights[node_id]
             weight_factor = 1.0 / len(participating_nodes)
