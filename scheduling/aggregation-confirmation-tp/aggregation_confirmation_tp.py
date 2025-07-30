@@ -9,6 +9,7 @@ import time
 import traceback
 import numpy as np
 from typing import Dict, List, Any
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 import torch.nn as nn
@@ -23,11 +24,12 @@ from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
 from coredis import RedisCluster
 from coredis.exceptions import RedisError
 
-# CouchDB configuration (primary storage for validation dataset)
+# CouchDB configuration (primary storage for validation dataset and model weights)
 COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
 COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
 COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
 COUCHDB_DB = 'validation_datasets'
+COUCHDB_WEIGHTS_DB = 'model_weights'  # Database for model weights storage
 COUCHDB_SSL_CA = os.getenv('COUCHDB_SSL_CA')
 COUCHDB_SSL_CERT = os.getenv('COUCHDB_SSL_CERT')
 COUCHDB_SSL_KEY = os.getenv('COUCHDB_SSL_KEY')
@@ -349,7 +351,7 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
         logger.info("Verifying FedAvg aggregation")
         
         try:
-            # Extract model weights from contributions
+            # Extract model weights from CouchDB using document IDs from contributions
             node_weights = {}
             total_samples = 0
             
@@ -358,7 +360,16 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                     raise InvalidTransaction(f"Missing contribution from node {node_id}")
                 
                 contribution = node_contributions[node_id]
-                node_weights[node_id] = contribution['model_weights']
+                
+                # Fetch model weights from CouchDB using stored document ID
+                weights_doc_id = contribution.get('weights_doc_id')
+                if not weights_doc_id:
+                    raise InvalidTransaction(f"Missing weights document ID for node {node_id}")
+                
+                # Retrieve weights from CouchDB
+                node_weights[node_id] = self.loop.run_until_complete(
+                    self._fetch_model_weights_from_couchdb(weights_doc_id, contribution.get('weights_hash'))
+                )
                 
                 # Use sample count from metadata for weighted averaging
                 samples = contribution.get('metadata', {}).get('sample_count', 1)
@@ -793,6 +804,52 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             
         except Exception as e:
             logger.error(f"Error retrieving validation dataset from CouchDB: {e}")
+            return None
+    
+    async def _fetch_model_weights_from_couchdb(self, doc_id: str, expected_hash: str = None) -> Dict:
+        """Fetch model weights from CouchDB with integrity verification"""
+        try:
+            logger.info(f"Fetching model weights from CouchDB: {doc_id}")
+            
+            # Use thread pool to make sync CouchDB call async
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self._get_couchdb_document, doc_id)
+                doc = future.result()
+            
+            if not doc:
+                raise InvalidTransaction(f"Model weights document not found: {doc_id}")
+            
+            model_weights = doc.get('model_weights')
+            if not model_weights:
+                raise InvalidTransaction(f"No model weights found in document: {doc_id}")
+            
+            # Verify content hash for integrity if provided
+            if expected_hash:
+                stored_hash = doc.get('content_hash')
+                if stored_hash != expected_hash:
+                    # Compute hash from weights to double-check
+                    computed_hash = hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()
+                    if computed_hash != expected_hash:
+                        raise InvalidTransaction(f"Model weights integrity check failed for {doc_id}")
+                    logger.warning(f"Stored hash mismatch but computed hash matches for {doc_id}")
+            
+            logger.info(f"Successfully retrieved model weights from CouchDB: {doc_id}")
+            return model_weights
+            
+        except Exception as e:
+            logger.error(f"Error fetching model weights from CouchDB {doc_id}: {e}")
+            raise InvalidTransaction(f"Failed to fetch model weights: {e}")
+    
+    def _get_couchdb_document(self, doc_id: str) -> Dict:
+        """Synchronous method to get document from CouchDB"""
+        try:
+            result = self.couchdb_client.get_document(
+                db=COUCHDB_WEIGHTS_DB,
+                doc_id=doc_id
+            ).get_result()
+            return result
+        except Exception as e:
+            logger.error(f"CouchDB error retrieving document {doc_id}: {e}")
             return None
 
 

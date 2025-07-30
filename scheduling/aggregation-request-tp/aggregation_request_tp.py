@@ -13,6 +13,9 @@ from sawtooth_sdk.processor.exceptions import InvalidTransaction
 from sawtooth_sdk.processor.core import TransactionProcessor
 from coredis import RedisCluster
 from coredis.exceptions import RedisError
+from ibmcloudant.cloudant_v1 import CloudantV1
+from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
+from ibm_cloud_sdk_core import ApiException
 
 # Redis configuration
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis-cluster')
@@ -21,6 +24,15 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 REDIS_SSL_CERT = os.getenv('REDIS_SSL_CERT')
 REDIS_SSL_KEY = os.getenv('REDIS_SSL_KEY')
 REDIS_SSL_CA = os.getenv('REDIS_SSL_CA')
+
+# CouchDB configuration for model weights storage
+COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
+COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
+COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
+COUCHDB_DB = 'model_weights'  # Dedicated database for model weights
+COUCHDB_SSL_CA = os.getenv('COUCHDB_SSL_CA')
+COUCHDB_SSL_CERT = os.getenv('COUCHDB_SSL_CERT')
+COUCHDB_SSL_KEY = os.getenv('COUCHDB_SSL_KEY')
 
 # Sawtooth configuration
 FAMILY_NAME = 'aggregation-request'
@@ -41,8 +53,11 @@ logger = logging.getLogger(__name__)
 class AggregationRequestTransactionHandler(TransactionHandler):
     def __init__(self):
         self.redis = None
+        self.couchdb_client = None
+        self.couchdb_certs = []
         self.loop = asyncio.get_event_loop()
         self._initialize_redis()
+        self._initialize_couchdb()
 
     @property
     def family_name(self):
@@ -114,6 +129,105 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                     logger.debug(f"Temporary file deleted: {file_path}")
                 except Exception as e:
                     logger.warning(f"Failed to delete temporary file {file_path}: {str(e)}")
+    
+    def _initialize_couchdb(self):
+        """Initialize CouchDB connection following framework patterns"""
+        logger.info("Starting CouchDB initialization for aggregation request TP")
+        try:
+            authenticator = BasicAuthenticator(COUCHDB_USERNAME, COUCHDB_PASSWORD)
+            self.couchdb_client = CloudantV1(authenticator=authenticator)
+            self.couchdb_client.set_service_url(COUCHDB_URL)
+
+            cert_files = None
+
+            if COUCHDB_SSL_CA:
+                ca_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                ca_file.write(COUCHDB_SSL_CA)
+                ca_file.flush()
+                self.couchdb_certs.append(ca_file)
+                ssl_verify = ca_file.name
+            else:
+                logger.warning("COUCHDB_SSL_CA is empty or not set")
+                ssl_verify = False
+
+            if COUCHDB_SSL_CERT and COUCHDB_SSL_KEY:
+                cert_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                key_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.key', delete=False)
+                cert_file.write(COUCHDB_SSL_CERT)
+                key_file.write(COUCHDB_SSL_KEY)
+                cert_file.flush()
+                key_file.flush()
+                self.couchdb_certs.extend([cert_file, key_file])
+                cert_files = (cert_file.name, key_file.name)
+            else:
+                logger.warning("COUCHDB_SSL_CERT or COUCHDB_SSL_KEY is empty or not set")
+
+            # Set the SSL configuration for the client
+            self.couchdb_client.set_http_config({
+                'verify': ssl_verify,
+                'cert': cert_files
+            })
+
+            # Test connection by checking if database exists
+            try:
+                self.couchdb_client.get_database_information(db=COUCHDB_DB).get_result()
+                logger.info(f"Successfully connected to CouchDB database '{COUCHDB_DB}'")
+            except Exception as db_error:
+                logger.warning(f"Database '{COUCHDB_DB}' not accessible: {db_error}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize CouchDB connection: {str(e)}")
+            self.cleanup_couchdb_temp_files()
+            raise
+    
+    def cleanup_couchdb_temp_files(self):
+        """Clean up temporary certificate files"""
+        for cert_file in self.couchdb_certs:
+            try:
+                cert_file.close()
+                os.unlink(cert_file.name)
+                logger.debug(f"Cleaned up temporary cert file: {cert_file.name}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up cert file: {e}")
+    
+    def _store_model_weights_in_couchdb(self, doc_id, model_weights, node_id, aggregation_id):
+        """Store model weights in CouchDB following framework patterns"""
+        try:
+            # Create content hash for integrity verification
+            content_hash = hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()
+            
+            # Create document structure
+            doc = {
+                '_id': doc_id,
+                'aggregation_id': aggregation_id,
+                'node_id': node_id,
+                'model_weights': model_weights,
+                'content_hash': content_hash,
+                'timestamp': int(time.time()),
+                'metadata': {
+                    'stored_by': 'aggregation-request-tp',
+                    'storage_version': '1.0'
+                }
+            }
+            
+            # Store in CouchDB
+            result = self.couchdb_client.put_document(
+                db=COUCHDB_DB,
+                doc_id=doc_id,
+                document=doc
+            ).get_result()
+            
+            logger.info(f"Stored model weights in CouchDB: {doc_id}")
+            return {
+                'success': True,
+                'doc_id': doc_id,
+                'content_hash': content_hash,
+                'rev': result.get('rev')
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to store model weights in CouchDB: {e}")
+            return None
 
     def apply(self, transaction, context):
         logger.info("Entering apply method for aggregation request")
@@ -255,6 +369,17 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         try:
             address = self._make_aggregation_address(aggregation_id)
             
+            # Store initial node's model weights in CouchDB
+            initial_weights_doc_id = f"{aggregation_id}_{initial_node_id}_weights"
+            weights_storage_result = self._store_model_weights_in_couchdb(
+                initial_weights_doc_id, initial_weights, initial_node_id, aggregation_id
+            )
+            
+            if not weights_storage_result:
+                raise InvalidTransaction(f"Failed to store initial model weights for node {initial_node_id}")
+            
+            logger.info(f"Stored model weights for {initial_node_id} in CouchDB: {initial_weights_doc_id}")
+            
             round_data = {
                 'aggregation_id': aggregation_id,
                 'workflow_id': workflow_id,
@@ -264,7 +389,8 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 'participating_nodes': [initial_node_id],
                 'node_contributions': {
                     initial_node_id: {
-                        'model_weights': initial_weights,
+                        'weights_doc_id': initial_weights_doc_id,
+                        'weights_hash': weights_storage_result['content_hash'],
                         'metadata': initial_payload.get('metadata', {})
                     }
                 },
@@ -313,10 +439,22 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             if round_data['status'] != 'collecting':
                 raise InvalidTransaction(f"Aggregation round {aggregation_id} is no longer collecting contributions")
             
-            # Add node contribution
+            # Store model weights in CouchDB and reference in blockchain
+            weights_doc_id = f"{aggregation_id}_{node_id}_weights"
+            weights_storage_result = self._store_model_weights_in_couchdb(
+                weights_doc_id, model_weights, node_id, aggregation_id
+            )
+            
+            if not weights_storage_result:
+                raise InvalidTransaction(f"Failed to store model weights for node {node_id}")
+            
+            logger.info(f"Stored model weights for {node_id} in CouchDB: {weights_doc_id}")
+            
+            # Add node contribution metadata (no weights in blockchain)
             round_data['participating_nodes'].append(node_id)
             round_data['node_contributions'][node_id] = {
-                'model_weights': model_weights,
+                'weights_doc_id': weights_doc_id,
+                'weights_hash': weights_storage_result['content_hash'],
                 'metadata': payload.get('metadata', {})
             }
             

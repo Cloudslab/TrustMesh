@@ -7,6 +7,7 @@ import ssl
 import tempfile
 import time
 import traceback
+import threading
 import numpy as np
 import zmq
 import zmq.asyncio
@@ -151,7 +152,6 @@ class FederatedAggregator:
                 'workflow_id': workflow_id,
                 'global_round_number': global_round_number,  # Use global round instead of IoT round
                 'expected_nodes': expected_nodes,
-                'collected_weights': {},
                 'start_time': start_time
             }
             
@@ -192,12 +192,22 @@ class FederatedAggregator:
                 return
                 
             aggregation_info = self.pending_aggregations[aggregation_id]
-            collected_count = len(aggregation_info['collected_weights'])
-            nodes_collected = list(aggregation_info['collected_weights'].keys())
+            
+            # Fetch current state from blockchain to check contributions
+            logger.info(f"🔍 Fetching current aggregation state from blockchain")
+            round_data = await self._fetch_aggregation_round_from_blockchain(aggregation_id)
+            
+            if round_data:
+                participating_nodes = round_data.get('participating_nodes', [])
+                collected_count = len(participating_nodes)
+            else:
+                logger.error(f"❌ Could not fetch aggregation state for {aggregation_id}")
+                collected_count = 0
+                participating_nodes = []
             
             logger.info(f"📊 Timer Expiry Status for {aggregation_id}:")
             logger.info(f"  └─ Nodes Collected: {collected_count}/{MIN_NODES_FOR_AGGREGATION}")
-            logger.info(f"  └─ Participating Nodes: {nodes_collected}")
+            logger.info(f"  └─ Participating Nodes: {participating_nodes}")
             
             if collected_count >= MIN_NODES_FOR_AGGREGATION:
                 logger.info(f"✅ Sufficient nodes collected - proceeding to lock round")
@@ -213,25 +223,101 @@ class FederatedAggregator:
             logger.error(f"❌ Error in collection timer for {aggregation_id}: {e}")
             await self._handle_aggregation_failure(aggregation_id, str(e))
 
-    def add_node_contribution(self, aggregation_id: str, node_id: str, model_weights: Dict):
-        """Add a node's model weights to the aggregation"""
-        if aggregation_id in self.pending_aggregations:
-            aggregation_info = self.pending_aggregations[aggregation_id]
-            aggregation_info['collected_weights'][node_id] = model_weights
+    async def _fetch_aggregation_round_from_blockchain(self, aggregation_id: str) -> Dict:
+        """Fetch aggregation round data from blockchain state"""
+        try:
+            # Create a state get request
+            aggregation_address = self._make_aggregation_address(aggregation_id)
             
-            collected_count = len(aggregation_info['collected_weights'])
-            expected_count = len(aggregation_info['expected_nodes'])
-            elapsed = time.time() - aggregation_info['start_time']
-            remaining = max(0, AGGREGATION_TIMEOUT - elapsed)
+            request = ClientStateGetRequest(
+                state_root='',  # Use current state root
+                addresses=[aggregation_address]
+            )
             
-            logger.info(f"📥 Added contribution from {node_id} to {aggregation_id}")
-            logger.info(f"📊 Collection Status:")
-            logger.info(f"  └─ Total Contributions: {collected_count}/{expected_count}")
-            logger.info(f"  └─ Nodes: {list(aggregation_info['collected_weights'].keys())}")
-            logger.info(f"  └─ Time Elapsed: {elapsed:.1f}s")
-            logger.info(f"  └─ Time Remaining: {remaining:.1f}s")
-        else:
-            logger.warning(f"⚠️  Received contribution for unknown aggregation {aggregation_id}")
+            # Send request to validator
+            response_future = stream.send(
+                message_type=Message.CLIENT_STATE_GET_REQUEST,
+                content=request.SerializeToString()
+            )
+            
+            response = ClientStateGetResponse()
+            response.ParseFromString(response_future.result().content)
+            
+            if response.status != ClientStateGetResponse.OK:
+                logger.error(f"Failed to get state: {response.status}")
+                return None
+                
+            # Parse the aggregation data
+            for entry in response.entries:
+                if entry.address == aggregation_address:
+                    return json.loads(entry.data.decode())
+                    
+            logger.error(f"Aggregation {aggregation_id} not found in state")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching aggregation round: {e}")
+            return None
+    
+    def _make_aggregation_address(self, aggregation_id):
+        """Generate blockchain address for aggregation request"""
+        return AGGREGATION_REQUEST_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
+    
+    async def _fetch_model_weights_from_couchdb(self, doc_id: str) -> Dict:
+        """Fetch model weights from CouchDB"""
+        try:
+            # Get document from CouchDB
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self._get_couchdb_document, doc_id)
+                doc = future.result()
+                
+            if not doc:
+                logger.error(f"Document {doc_id} not found in CouchDB")
+                return None
+                
+            # Verify content hash for integrity
+            model_weights = doc.get('model_weights')
+            stored_hash = doc.get('content_hash')
+            
+            if model_weights and stored_hash:
+                computed_hash = hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()
+                if computed_hash == stored_hash:
+                    return model_weights
+                else:
+                    logger.error(f"Content hash mismatch for {doc_id}")
+                    return None
+            else:
+                logger.error(f"Missing weights or hash in document {doc_id}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error fetching model weights from CouchDB: {e}")
+            return None
+    
+    def _get_couchdb_document(self, doc_id: str) -> Dict:
+        """Get document from CouchDB (synchronous wrapper)"""
+        try:
+            # Use the same CouchDB client pattern as aggregation-confirmation-tp
+            from ibmcloudant.cloudant_v1 import CloudantV1
+            from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
+            
+            # Initialize CouchDB client (reuse connection logic)
+            COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
+            COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
+            COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
+            COUCHDB_DB = 'model_weights'
+            
+            authenticator = BasicAuthenticator(COUCHDB_USERNAME, COUCHDB_PASSWORD)
+            couchdb_client = CloudantV1(authenticator=authenticator)
+            couchdb_client.set_service_url(COUCHDB_URL)
+            
+            # Get document
+            result = couchdb_client.get_document(db=COUCHDB_DB, doc_id=doc_id).get_result()
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting document from CouchDB: {e}")
+            return None
 
     async def _lock_aggregation_round(self, aggregation_id: str):
         """Lock the aggregation round to prevent new nodes from joining"""
@@ -272,15 +358,40 @@ class FederatedAggregator:
             logger.info(f"🧮 PERFORMING FedAvg aggregation for {aggregation_id}")
             
             aggregation_info = self.pending_aggregations[aggregation_id]
-            node_weights = aggregation_info['collected_weights']
-            participating_nodes = list(node_weights.keys())
+            
+            # Fetch the aggregation round data from blockchain to get all contributions
+            logger.info(f"🔍 Fetching aggregation round data from blockchain")
+            round_data = await self._fetch_aggregation_round_from_blockchain(aggregation_id)
+            
+            if not round_data:
+                raise Exception(f"Failed to fetch aggregation round {aggregation_id} from blockchain")
+                
+            # Extract node contributions metadata from blockchain data
+            node_contributions = round_data.get('node_contributions', {})
+            participating_nodes = round_data.get('participating_nodes', [])
             
             logger.info(f"📊 Aggregation Details:")
             logger.info(f"  └─ Participating Nodes: {participating_nodes}")
             logger.info(f"  └─ Node Count: {len(participating_nodes)}")
+            logger.info(f"  └─ Status: {round_data.get('status')}")
+            
+            # Fetch model weights from CouchDB using document IDs
+            logger.info(f"🔍 Fetching model weights from CouchDB")
+            node_weights = {}
+            for node_id in participating_nodes:
+                if node_id in node_contributions:
+                    weights_doc_id = node_contributions[node_id]['weights_doc_id']
+                    weights = await self._fetch_model_weights_from_couchdb(weights_doc_id)
+                    if weights:
+                        node_weights[node_id] = weights
+                        logger.info(f"  └─ Fetched weights for {node_id}")
+                    else:
+                        logger.error(f"❌ Failed to fetch weights for {node_id} from {weights_doc_id}")
+                else:
+                    logger.error(f"❌ Missing contribution metadata from {node_id}")
             
             # Compute FedAvg
-            logger.info(f"🔧 Computing FedAvg with {len(participating_nodes)} nodes")
+            logger.info(f"🔧 Computing FedAvg with {len(node_weights)} nodes")
             aggregated_weights = self._compute_fedavg(node_weights, participating_nodes)
             
             # Store aggregated weights before submitting confirmation
@@ -555,26 +666,26 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
             # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
             try:
                 loop = aggregator.loop
-                asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     aggregator.start_aggregation_collection(
                         aggregation_id, workflow_id, global_round_number, expected_nodes
                     ), loop
                 )
+                logger.info(f"Scheduled aggregation collection task for {aggregation_id}")
+                # Log any immediate exceptions
+                loop.call_soon_threadsafe(lambda: logger.info(f"Event loop is running: {loop.is_running()}"))
             except Exception as e:
                 logger.error(f"❌ Error scheduling aggregation collection: {e}")
+                logger.error(traceback.format_exc())
         else:
-            # This node received the event but is not the aggregator
-            # Check if this is a subsequent contribution from another IoT node
+            # This node received the event but is not the designated aggregator
             logger.info(f"📢 Received aggregation event for {aggregation_id}")
             logger.info(f"  └─ Aggregator: {aggregator_node} (not this node)")
-            logger.info(f"  └─ Node ID: {node_id}")
+            logger.info(f"  └─ Contributing Node: {node_id}")
             logger.info(f"  └─ Global Round: {global_round_number}")
             
-            # If we are the aggregator for this aggregation, add the contribution
-            if aggregation_id in aggregator.pending_aggregations:
-                logger.info(f"  └─ This is a subsequent contribution - adding to collection")
-                # Note: The actual weights need to be retrieved from blockchain state
-                # This is just the event notification
+            # Note: All nodes receive all events, but only the aggregator acts on them
+            # The aggregator will fetch all contributions from blockchain when timer expires
             
     elif event.event_type == "aggregation-confirmation":
         logger.info("Aggregation Event Handler: aggregation-confirmation event")
@@ -619,7 +730,7 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
             # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
             try:
                 loop = aggregator.loop
-                asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     aggregator._broadcast_aggregated_model(
                         aggregated_weights,
                         participating_nodes,
@@ -628,8 +739,10 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                         validation_metrics
                     ), loop
                 )
+                logger.info(f"Scheduled broadcast task for {aggregation_id}")
             except Exception as e:
                 logger.error(f"Error scheduling broadcast: {e}")
+                logger.error(traceback.format_exc())
         
     else:
         logger.info(f"Aggregation Event Handler: Unhandled event type: {event.event_type}")
@@ -708,18 +821,25 @@ def process_future_result(future_result):
         }
 
 
+def run_event_loop_in_thread(loop):
+    """Run the event loop in a separate thread"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
 def main():
     logger.info("Starting Aggregation Event Handler")
     
-    # Ensure we have an event loop for async operations
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # Create a new event loop for async operations
+    loop = asyncio.new_event_loop()
     
-    # Initialize aggregator
+    # Run the event loop in a separate thread
+    loop_thread = threading.Thread(target=run_event_loop_in_thread, args=(loop,), daemon=True)
+    loop_thread.start()
+    logger.info("Event loop thread started")
+    
+    # Initialize aggregator with the event loop
     aggregator = FederatedAggregator(node_id, redis)
+    aggregator.loop = loop  # Ensure aggregator uses our event loop
 
     # Set up event subscriptions
     aggregation_request_event = EventSubscription(
