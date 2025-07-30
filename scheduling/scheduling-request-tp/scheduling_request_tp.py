@@ -109,9 +109,9 @@ class IoTScheduleTransactionHandler(TransactionHandler):
     def apply(self, transaction, context):
         logger.info("Entering apply method")
         try:
-            logger.debug(f"Transaction payload: {transaction.payload}")
             payload = json.loads(transaction.payload.decode())
-            logger.info(f"Decoded payload: {payload}")
+            # Log basic info without full payload
+            logger.info(f"Processing scheduling request for workflow: {payload.get('workflow_id', 'unknown')}")
 
             self._handle_schedule_request(payload, context)
 
