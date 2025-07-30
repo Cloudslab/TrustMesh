@@ -360,16 +360,53 @@ class FederatedAggregator:
             # Use the same CouchDB client pattern as aggregation-confirmation-tp
             from ibmcloudant.cloudant_v1 import CloudantV1
             from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
+            import tempfile
+            import os
             
             # Initialize CouchDB client (reuse connection logic)
             COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
             COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
             COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
+            COUCHDB_SSL_CA = os.getenv('COUCHDB_SSL_CA')
+            COUCHDB_SSL_CERT = os.getenv('COUCHDB_SSL_CERT')
+            COUCHDB_SSL_KEY = os.getenv('COUCHDB_SSL_KEY')
             COUCHDB_DB = 'model_weights'
             
             authenticator = BasicAuthenticator(COUCHDB_USERNAME, COUCHDB_PASSWORD)
             couchdb_client = CloudantV1(authenticator=authenticator)
             couchdb_client.set_service_url(COUCHDB_URL)
+            
+            # Set up SSL configuration like other components
+            cert_files = None
+            temp_files = []
+            
+            if COUCHDB_SSL_CA:
+                ca_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                ca_file.write(COUCHDB_SSL_CA)
+                ca_file.flush()
+                temp_files.append(ca_file)
+                ssl_verify = ca_file.name
+            else:
+                logger.warning("COUCHDB_SSL_CA is empty or not set")
+                ssl_verify = False
+
+            if COUCHDB_SSL_CERT and COUCHDB_SSL_KEY:
+                cert_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.crt', delete=False)
+                key_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.key', delete=False)
+                cert_file.write(COUCHDB_SSL_CERT)
+                key_file.write(COUCHDB_SSL_KEY)
+                cert_file.flush()
+                key_file.flush()
+                temp_files.extend([cert_file, key_file])
+                cert_files = (cert_file.name, key_file.name)
+            else:
+                logger.warning("COUCHDB_SSL_CERT or COUCHDB_SSL_KEY is empty or not set")
+
+            # Set the SSL configuration for the client
+            couchdb_client.set_http_config({
+                'verify': ssl_verify,
+                'cert': cert_files
+            })
             
             # Try to store document (use post_document to let CouchDB handle conflicts gracefully)
             try:
@@ -384,6 +421,14 @@ class FederatedAggregator:
                 result = couchdb_client.put_document(db=COUCHDB_DB, doc_id=doc_id, document=doc).get_result()
                 logger.info(f"Created new document: {doc_id}")
             
+            # Clean up temporary files
+            for temp_file in temp_files:
+                try:
+                    temp_file.close()
+                    os.unlink(temp_file.name)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temp file: {cleanup_error}")
+            
             return {
                 'success': True,
                 'doc_id': doc_id,
@@ -392,6 +437,13 @@ class FederatedAggregator:
             
         except Exception as e:
             logger.error(f"CouchDB storage error for {doc_id}: {e}")
+            # Clean up temporary files on error
+            for temp_file in temp_files:
+                try:
+                    temp_file.close()
+                    os.unlink(temp_file.name)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temp file: {cleanup_error}")
             return {
                 'success': False,
                 'error': str(e)
