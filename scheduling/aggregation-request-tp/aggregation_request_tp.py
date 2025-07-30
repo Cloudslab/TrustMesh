@@ -292,7 +292,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         aggregation_round = existing_round if existing_round else self._get_aggregation_round(context, aggregation_id)
         global_round_number = aggregation_round.get('global_round_number', 1)
         
-        # Emit aggregation request event
+        # Emit aggregation request event with model weights for aggregator to store in CouchDB
         context.add_event(
             event_type="aggregation-request",
             attributes=[
@@ -301,6 +301,10 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 ("node_id", node_id),
                 ("global_round_number", str(global_round_number)),
                 ("aggregator_node", aggregator_node),
+                ("weights_doc_id", f"{aggregation_id}_{node_id}_weights"),
+                ("weights_hash", hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()),
+                ("model_weights", json.dumps(model_weights)),  # Include model weights in event for aggregator
+                ("metadata", json.dumps(payload.get('metadata', {}))),
                 ("timestamp", str(int(time.time())))
             ]
         )
@@ -369,16 +373,11 @@ class AggregationRequestTransactionHandler(TransactionHandler):
         try:
             address = self._make_aggregation_address(aggregation_id)
             
-            # Store initial node's model weights in CouchDB
+            # Create document ID and content hash for model weights (store metadata only in blockchain)
             initial_weights_doc_id = f"{aggregation_id}_{initial_node_id}_weights"
-            weights_storage_result = self._store_model_weights_in_couchdb(
-                initial_weights_doc_id, initial_weights, initial_node_id, aggregation_id
-            )
+            content_hash = hashlib.sha256(json.dumps(initial_weights, sort_keys=True).encode()).hexdigest()
             
-            if not weights_storage_result:
-                raise InvalidTransaction(f"Failed to store initial model weights for node {initial_node_id}")
-            
-            logger.info(f"Stored model weights for {initial_node_id} in CouchDB: {initial_weights_doc_id}")
+            logger.info(f"Prepared model weights metadata for {initial_node_id}: {initial_weights_doc_id}")
             
             round_data = {
                 'aggregation_id': aggregation_id,
@@ -390,7 +389,7 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                 'node_contributions': {
                     initial_node_id: {
                         'weights_doc_id': initial_weights_doc_id,
-                        'weights_hash': weights_storage_result['content_hash'],
+                        'weights_hash': content_hash,
                         'metadata': initial_payload.get('metadata', {})
                     }
                 },
@@ -439,22 +438,17 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             if round_data['status'] != 'collecting':
                 raise InvalidTransaction(f"Aggregation round {aggregation_id} is no longer collecting contributions")
             
-            # Store model weights in CouchDB and reference in blockchain
+            # Create document ID and content hash for model weights (store metadata only in blockchain)
             weights_doc_id = f"{aggregation_id}_{node_id}_weights"
-            weights_storage_result = self._store_model_weights_in_couchdb(
-                weights_doc_id, model_weights, node_id, aggregation_id
-            )
+            content_hash = hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()
             
-            if not weights_storage_result:
-                raise InvalidTransaction(f"Failed to store model weights for node {node_id}")
-            
-            logger.info(f"Stored model weights for {node_id} in CouchDB: {weights_doc_id}")
+            logger.info(f"Prepared model weights metadata for {node_id}: {weights_doc_id}")
             
             # Add node contribution metadata (no weights in blockchain)
             round_data['participating_nodes'].append(node_id)
             round_data['node_contributions'][node_id] = {
                 'weights_doc_id': weights_doc_id,
-                'weights_hash': weights_storage_result['content_hash'],
+                'weights_hash': content_hash,
                 'metadata': payload.get('metadata', {})
             }
             

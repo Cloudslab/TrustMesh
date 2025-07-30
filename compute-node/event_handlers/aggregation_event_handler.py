@@ -318,6 +318,84 @@ class FederatedAggregator:
         except Exception as e:
             logger.error(f"Error getting document from CouchDB: {e}")
             return None
+    
+    async def _store_model_weights_async(self, weights_doc_id: str, model_weights: Dict, 
+                                       node_id: str, aggregation_id: str, weights_hash: str, metadata: Dict):
+        \"\"\"Store model weights in CouchDB asynchronously (aggregator node only)\"\"\"
+        try:
+            logger.info(f\"💾 Storing model weights for {node_id} in CouchDB: {weights_doc_id}\")
+            
+            # Create document structure following framework patterns
+            doc = {
+                '_id': weights_doc_id,
+                'aggregation_id': aggregation_id,
+                'node_id': node_id,
+                'model_weights': model_weights,
+                'content_hash': weights_hash,
+                'timestamp': int(time.time()),
+                'metadata': {
+                    'stored_by': 'aggregation-event-handler',
+                    'storage_version': '1.0',
+                    **metadata
+                }
+            }
+            
+            # Use thread pool to make sync CouchDB call async
+            with ThreadPoolExecutor() as executor:
+                future = executor.submit(self._store_couchdb_document_sync, weights_doc_id, doc)
+                result = future.result()
+                
+                if result['success']:
+                    logger.info(f\"✅ Successfully stored model weights for {node_id}: {weights_doc_id}\")
+                else:
+                    logger.error(f\"❌ Failed to store model weights for {node_id}: {result['error']}\")
+                    
+        except Exception as e:
+            logger.error(f\"❌ Error storing model weights for {node_id}: {e}\")
+            logger.error(traceback.format_exc())
+    
+    def _store_couchdb_document_sync(self, doc_id: str, doc: Dict) -> Dict:
+        \"\"\"Synchronous method to store document in CouchDB\"\"\"
+        try:
+            # Use the same CouchDB client pattern as aggregation-confirmation-tp
+            from ibmcloudant.cloudant_v1 import CloudantV1
+            from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
+            
+            # Initialize CouchDB client (reuse connection logic)
+            COUCHDB_URL = f\"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}\"
+            COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
+            COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
+            COUCHDB_DB = 'model_weights'
+            
+            authenticator = BasicAuthenticator(COUCHDB_USERNAME, COUCHDB_PASSWORD)
+            couchdb_client = CloudantV1(authenticator=authenticator)
+            couchdb_client.set_service_url(COUCHDB_URL)
+            
+            # Try to store document (use post_document to let CouchDB handle conflicts gracefully)
+            try:
+                # First try to get existing document
+                existing_doc = couchdb_client.get_document(db=COUCHDB_DB, doc_id=doc_id).get_result()
+                # Document exists, update it
+                doc['_rev'] = existing_doc['_rev']
+                result = couchdb_client.put_document(db=COUCHDB_DB, doc_id=doc_id, document=doc).get_result()
+                logger.info(f\"Updated existing document: {doc_id}\")
+            except:
+                # Document doesn't exist, create new one
+                result = couchdb_client.put_document(db=COUCHDB_DB, doc_id=doc_id, document=doc).get_result()
+                logger.info(f\"Created new document: {doc_id}\")
+            
+            return {
+                'success': True,
+                'doc_id': doc_id,
+                'rev': result.get('rev')
+            }
+            
+        except Exception as e:
+            logger.error(f\"CouchDB storage error for {doc_id}: {e}\")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     async def _lock_aggregation_round(self, aggregation_id: str):
         """Lock the aggregation round to prevent new nodes from joining"""
@@ -643,6 +721,10 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
         node_id = None
         global_round_number = None
         aggregator_node = None
+        weights_doc_id = None
+        weights_hash = None
+        model_weights = None
+        metadata = None
         
         for attr in event.attributes:
             if attr.key == "aggregation_id":
@@ -655,28 +737,53 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                 global_round_number = int(attr.value)
             elif attr.key == "aggregator_node":
                 aggregator_node = attr.value
+            elif attr.key == "weights_doc_id":
+                weights_doc_id = attr.value
+            elif attr.key == "weights_hash":
+                weights_hash = attr.value
+            elif attr.key == "model_weights":
+                model_weights = json.loads(attr.value)
+            elif attr.key == "metadata":
+                metadata = json.loads(attr.value)
         
         if aggregator_node == aggregator.node_id:
             logger.info(f"🎯 This node ({aggregator.node_id}) is assigned as aggregator for {aggregation_id}")
             
-            # Get expected nodes from environment or default
-            expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
+            # Store model weights in CouchDB asynchronously (aggregator node only)
+            if model_weights and weights_doc_id:
+                try:
+                    loop = aggregator.loop
+                    future = asyncio.run_coroutine_threadsafe(
+                        aggregator._store_model_weights_async(
+                            weights_doc_id, model_weights, node_id, aggregation_id, weights_hash, metadata
+                        ), loop
+                    )
+                    logger.info(f"Scheduled CouchDB storage for {node_id} weights: {weights_doc_id}")
+                except Exception as e:
+                    logger.error(f"❌ Error scheduling CouchDB storage: {e}")
+                    logger.error(traceback.format_exc())
             
-            # Start aggregation collection asynchronously
+            # Start aggregation collection asynchronously (only if not already started)
             # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
-            try:
-                loop = aggregator.loop
-                future = asyncio.run_coroutine_threadsafe(
-                    aggregator.start_aggregation_collection(
-                        aggregation_id, workflow_id, global_round_number, expected_nodes
-                    ), loop
-                )
-                logger.info(f"Scheduled aggregation collection task for {aggregation_id}")
-                # Log any immediate exceptions
-                loop.call_soon_threadsafe(lambda: logger.info(f"Event loop is running: {loop.is_running()}"))
-            except Exception as e:
-                logger.error(f"❌ Error scheduling aggregation collection: {e}")
-                logger.error(traceback.format_exc())
+            if aggregation_id not in aggregator.pending_aggregations:
+                try:
+                    # Get expected nodes from environment or default
+                    expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
+                    
+                    loop = aggregator.loop
+                    future = asyncio.run_coroutine_threadsafe(
+                        aggregator.start_aggregation_collection(
+                            aggregation_id, workflow_id, global_round_number, expected_nodes
+                        ), loop
+                    )
+                    logger.info(f"Scheduled aggregation collection task for {aggregation_id}")
+                    # Log any immediate exceptions
+                    loop.call_soon_threadsafe(lambda: logger.info(f"Event loop is running: {loop.is_running()}"))
+                except Exception as e:
+                    logger.error(f"❌ Error scheduling aggregation collection: {e}")
+                    logger.error(traceback.format_exc())
+            else:
+                logger.info(f"🔄 Aggregation round {aggregation_id} already in progress, added contribution from {node_id}")
         else:
             # This node received the event but is not the designated aggregator
             logger.info(f"📢 Received aggregation event for {aggregation_id}")
