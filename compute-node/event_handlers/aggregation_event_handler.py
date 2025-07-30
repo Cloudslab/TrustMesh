@@ -321,9 +321,9 @@ class FederatedAggregator:
     
     async def _store_model_weights_async(self, weights_doc_id: str, model_weights: Dict, 
                                        node_id: str, aggregation_id: str, weights_hash: str, metadata: Dict):
-        \"\"\"Store model weights in CouchDB asynchronously (aggregator node only)\"\"\"
+        """Store model weights in CouchDB asynchronously (aggregator node only)"""
         try:
-            logger.info(f\"💾 Storing model weights for {node_id} in CouchDB: {weights_doc_id}\")
+            logger.info(f"💾 Storing model weights for {node_id} in CouchDB: {weights_doc_id}")
             
             # Create document structure following framework patterns
             doc = {
@@ -346,23 +346,23 @@ class FederatedAggregator:
                 result = future.result()
                 
                 if result['success']:
-                    logger.info(f\"✅ Successfully stored model weights for {node_id}: {weights_doc_id}\")
+                    logger.info(f"✅ Successfully stored model weights for {node_id}: {weights_doc_id}")
                 else:
-                    logger.error(f\"❌ Failed to store model weights for {node_id}: {result['error']}\")
+                    logger.error(f"❌ Failed to store model weights for {node_id}: {result['error']}")
                     
         except Exception as e:
-            logger.error(f\"❌ Error storing model weights for {node_id}: {e}\")
+            logger.error(f"❌ Error storing model weights for {node_id}: {e}")
             logger.error(traceback.format_exc())
     
     def _store_couchdb_document_sync(self, doc_id: str, doc: Dict) -> Dict:
-        \"\"\"Synchronous method to store document in CouchDB\"\"\"
+        """Synchronous method to store document in CouchDB"""
         try:
             # Use the same CouchDB client pattern as aggregation-confirmation-tp
             from ibmcloudant.cloudant_v1 import CloudantV1
             from ibm_cloud_sdk_core.authenticators import BasicAuthenticator
             
             # Initialize CouchDB client (reuse connection logic)
-            COUCHDB_URL = f\"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}\"
+            COUCHDB_URL = f"https://{os.getenv('COUCHDB_HOST', 'couchdb-0.default.svc.cluster.local:6984')}"
             COUCHDB_USERNAME = os.getenv('COUCHDB_USER')
             COUCHDB_PASSWORD = os.getenv('COUCHDB_PASSWORD')
             COUCHDB_DB = 'model_weights'
@@ -378,11 +378,11 @@ class FederatedAggregator:
                 # Document exists, update it
                 doc['_rev'] = existing_doc['_rev']
                 result = couchdb_client.put_document(db=COUCHDB_DB, doc_id=doc_id, document=doc).get_result()
-                logger.info(f\"Updated existing document: {doc_id}\")
+                logger.info(f"Updated existing document: {doc_id}")
             except:
                 # Document doesn't exist, create new one
                 result = couchdb_client.put_document(db=COUCHDB_DB, doc_id=doc_id, document=doc).get_result()
-                logger.info(f\"Created new document: {doc_id}\")
+                logger.info(f"Created new document: {doc_id}")
             
             return {
                 'success': True,
@@ -391,7 +391,7 @@ class FederatedAggregator:
             }
             
         except Exception as e:
-            logger.error(f\"CouchDB storage error for {doc_id}: {e}\")
+            logger.error(f"CouchDB storage error for {doc_id}: {e}")
             return {
                 'success': False,
                 'error': str(e)
