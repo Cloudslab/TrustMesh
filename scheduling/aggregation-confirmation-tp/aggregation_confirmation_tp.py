@@ -231,12 +231,11 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
     def apply(self, transaction, context):
         logger.info("Entering apply method for aggregation confirmation")
         try:
-            logger.debug(f"Transaction payload: {transaction.payload}")
             payload = json.loads(transaction.payload.decode())
-            logger.info(f"Decoded payload: {payload}")
-            
             # Check if this is a status update or aggregation confirmation
             action = payload.get('action', 'confirm')
+            # Log payload info without the actual weights
+            logger.info(f"Processing {action} action for aggregation: {payload.get('aggregation_id', 'unknown')}")
             
             if action == 'lock':
                 self._handle_status_update(payload, context)
@@ -349,6 +348,8 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                                  participating_nodes: List[str]) -> Dict:
         """Verify FedAvg aggregation is computed correctly"""
         logger.info("Verifying FedAvg aggregation")
+        logger.debug(f"Participating nodes: {participating_nodes}")
+        logger.debug(f"Node contributions: {list(node_contributions.keys())}")
         
         try:
             # Extract model weights from CouchDB using document IDs from contributions
@@ -366,10 +367,28 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 if not weights_doc_id:
                     raise InvalidTransaction(f"Missing weights document ID for node {node_id}")
                 
-                # Retrieve weights from CouchDB
-                node_weights[node_id] = self.loop.run_until_complete(
-                    self._fetch_model_weights_from_couchdb(weights_doc_id, contribution.get('weights_hash'))
-                )
+                # Retrieve weights from CouchDB synchronously
+                logger.info(f"Fetching weights for node {node_id} from CouchDB: {weights_doc_id}")
+                doc = self._get_couchdb_document(weights_doc_id)
+                if not doc:
+                    logger.error(f"Failed to fetch document {weights_doc_id} from CouchDB")
+                    raise InvalidTransaction(f"Model weights document not found: {weights_doc_id}")
+                
+                model_weights = doc.get('model_weights')
+                if not model_weights:
+                    raise InvalidTransaction(f"No model weights found in document: {weights_doc_id}")
+                
+                # Verify content hash for integrity
+                expected_hash = contribution.get('weights_hash')
+                if expected_hash:
+                    stored_hash = doc.get('content_hash')
+                    if stored_hash != expected_hash:
+                        computed_hash = hashlib.sha256(json.dumps(model_weights, sort_keys=True).encode()).hexdigest()
+                        if computed_hash != expected_hash:
+                            raise InvalidTransaction(f"Model weights integrity check failed for {node_id}")
+                        logger.warning(f"Stored hash mismatch but computed hash matches for {node_id}")
+                
+                node_weights[node_id] = model_weights
                 
                 # Use sample count from metadata for weighted averaging
                 samples = contribution.get('metadata', {}).get('sample_count', 1)

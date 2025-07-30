@@ -201,7 +201,9 @@ class FederatedAggregator:
                 participating_nodes = round_data.get('participating_nodes', [])
                 collected_count = len(participating_nodes)
                 logger.info(f"✅ Fetched aggregation state - {collected_count} nodes have contributed")
-                logger.debug(f"Round data: {round_data}")
+                # Log round info without weights
+                logger.debug(f"Round data: aggregation_id={round_data.get('aggregation_id')}, "
+                           f"status={round_data.get('status')}, nodes={participating_nodes}")
             else:
                 logger.error(f"❌ Could not fetch aggregation state for {aggregation_id}")
                 collected_count = 0
