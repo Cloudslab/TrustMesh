@@ -675,12 +675,12 @@ class MNISTFederatedNode:
                 
                 # Wait for aggregated model
                 logger.info(f"\n⏳ WAITING FOR GLOBAL MODEL AGGREGATION")
-                logger.info(f"   • Round: {round_num}")
-                logger.info(f"   • Timeout: 180 seconds (3 minutes)")
-                logger.info(f"   • Waiting for aggregator to complete FedAvg and validation...")
+                logger.info(f"   • Local Round: {round_num}")
+                logger.info(f"   • Timeout: 600 seconds (10 minutes)")
+                logger.info(f"   • Waiting for next aggregated model (any global round)...")
                 
                 aggregation_wait_start = time.time()
-                aggregated_weights = await fed_response_manager.wait_for_aggregated_model(workflow_id, round_num, timeout=180)
+                aggregated_weights = await fed_response_manager.wait_for_next_aggregated_model(workflow_id, timeout=600)
                 aggregation_wait_duration = time.time() - aggregation_wait_start
                 
                 if aggregated_weights:

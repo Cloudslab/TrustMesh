@@ -41,7 +41,7 @@ class FederatedResponseManager:
         
         # Event-driven coordination - use threading.Event for cross-thread compatibility
         self.model_events = {}  # workflow_round -> threading.Event
-        self.training_events = {}  # schedule_id -> threading.Event
+        self.training_events = {}  # schedule_id -> threading.Event (for cross-thread training completion)
         self.convergence_tracker = {}
         
         # Local storage for trained weights (instead of Redis)
@@ -459,7 +459,7 @@ class FederatedResponseManager:
         """Get history of federated rounds"""
         return self.round_history
     
-    async def wait_for_aggregated_model(self, workflow_id: str, round_number: int, timeout: int = 180) -> Optional[Dict]:
+    async def wait_for_aggregated_model(self, workflow_id: str, round_number: int, timeout: int = 600) -> Optional[Dict]:
         """Wait for aggregated model using event-driven approach instead of polling"""
         model_key = f"{workflow_id}_round_{round_number}"
         wait_start_time = time.time()
@@ -484,9 +484,13 @@ class FederatedResponseManager:
             logger.info(f"🟠 EVENT CREATED: Event handler created for {model_key}")
         
         try:
-            # Wait for event to be signaled
+            # Wait for event to be signaled using asyncio thread executor
             logger.info(f"⏳ WAITING: For aggregated model event (max {timeout}s)")
-            await asyncio.wait_for(self.model_events[model_key].wait(), timeout=timeout)
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(
+                loop.run_in_executor(None, self.model_events[model_key].wait, timeout),
+                timeout=timeout + 1  # Add buffer to asyncio timeout
+            )
             
             wait_duration = time.time() - wait_start_time
             
@@ -616,6 +620,70 @@ class FederatedResponseManager:
         """Get the public key of the federated response manager (same as IoTDeviceManager)"""
         return self._public_key.decode('ascii')
 
+    async def wait_for_next_aggregated_model(self, workflow_id: str, timeout: int = 600) -> Optional[Dict]:
+        """
+        Wait for the next aggregated model for this workflow, regardless of round number.
+        This is simpler than tracking global vs local round numbers.
+        """
+        wait_start_time = time.time()
+        
+        logger.info(f"🔍 FEDERATED RESPONSE: Waiting for next aggregated model")
+        logger.info(f"   • Workflow: {workflow_id}")
+        logger.info(f"   • Node: {self.node_id}")
+        logger.info(f"   • Timeout: {timeout}s")
+        
+        # Create a generic event for this workflow if it doesn't exist
+        workflow_event_key = f"{workflow_id}_next_model"
+        if workflow_event_key not in self.model_events:
+            self.model_events[workflow_event_key] = threading.Event()
+            logger.info(f"🟠 EVENT CREATED: Event handler created for next model on {workflow_id}")
+        
+        # Store the initial model count to detect new models
+        initial_models = [key for key in self.aggregated_models.keys() if key.startswith(f"{workflow_id}_round_")]
+        initial_count = len(initial_models)
+        logger.info(f"📊 CURRENT STATE: {initial_count} models already cached for this workflow")
+        
+        try:
+            while time.time() - wait_start_time < timeout:
+                # Check for new models
+                current_models = [key for key in self.aggregated_models.keys() if key.startswith(f"{workflow_id}_round_")]
+                current_count = len(current_models)
+                
+                if current_count > initial_count:
+                    # New model arrived!
+                    new_models = [m for m in current_models if m not in initial_models]
+                    latest_model_key = sorted(new_models)[-1]  # Get the latest by round number
+                    
+                    wait_duration = time.time() - wait_start_time
+                    logger.info(f"✅ NEW AGGREGATED MODEL DETECTED")
+                    logger.info(f"   • Model key: {latest_model_key}")
+                    logger.info(f"   • Wait duration: {wait_duration:.2f}s")
+                    
+                    model_data = self.aggregated_models[latest_model_key]
+                    logger.info(f"   • Global round: {model_data['round_number']}")
+                    logger.info(f"   • Participating nodes: {model_data['participating_nodes']}")
+                    logger.info(f"   • Aggregator: {model_data['aggregator_node']}")
+                    
+                    return model_data.get('aggregated_weights', {})
+                
+                # Wait for a short interval before checking again
+                await asyncio.sleep(1.0)
+                
+        except Exception as e:
+            wait_duration = time.time() - wait_start_time
+            logger.error(f"❌ ERROR WAITING FOR MODEL")
+            logger.error(f"   • Error: {str(e)}")
+            logger.error(f"   • Wait duration: {wait_duration:.2f}s")
+            return None
+            
+        # Timeout
+        wait_duration = time.time() - wait_start_time
+        logger.error(f"❌ AGGREGATED MODEL TIMEOUT")
+        logger.error(f"   • Workflow: {workflow_id}")
+        logger.error(f"   • Timeout duration: {wait_duration:.2f}s (max: {timeout}s)")
+        logger.error(f"   • No new models received during wait period")
+        return None
+        
     async def shutdown(self):
         """Shutdown the federated response manager"""
         logger.info(f"Shutting down federated response manager for node {self.node_id}")
