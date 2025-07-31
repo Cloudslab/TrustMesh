@@ -837,50 +837,42 @@ class FederatedAggregator:
         try:
             logger.info(f"Retrieving connection details for {len(participating_nodes)} nodes from blockchain")
             
-            # Get aggregation round data from blockchain
+            # Get aggregation round data using existing method
             aggregation_id = f"{workflow_id}_agg_{global_round_number}"
-            address = self._make_aggregation_address(aggregation_id)
+            aggregation_data = await self._fetch_aggregation_round_from_blockchain(aggregation_id)
             
-            # Query blockchain state
-            request = ClientStateGetRequest(address=address)
-            response_future = self.stream.send(
-                message_type=Message.CLIENT_STATE_GET_REQUEST,
-                content=request.SerializeToString()
-            )
-            response = ClientStateGetResponse()
-            response.ParseFromString(await response_future)
-            
-            if response.status == ClientStateGetResponse.OK and response.value:
-                aggregation_data = json.loads(response.value.decode())
-                node_contributions = aggregation_data.get('node_contributions', {})
-                
-                connection_details = {}
-                for node_id in participating_nodes:
-                    if node_id in node_contributions:
-                        contribution = node_contributions[node_id]
-                        connection_details[node_id] = {
-                            'source_url': contribution.get('source_url'),
-                            'source_public_key': contribution.get('source_public_key')
-                        }
-                        logger.info(f"Found connection details for {node_id}: {contribution.get('source_url')}")
-                    else:
-                        logger.warning(f"No contribution found for node {node_id} in aggregation data")
-                
-                return connection_details
-            else:
-                logger.error(f"Failed to retrieve aggregation data from blockchain: {response.status}")
+            if not aggregation_data:
+                logger.error(f"Failed to retrieve aggregation data from blockchain for {aggregation_id}")
                 return {}
+            
+            node_contributions = aggregation_data.get('node_contributions', {})
+            connection_details = {}
+            
+            for node_id in participating_nodes:
+                if node_id in node_contributions:
+                    contribution = node_contributions[node_id]
+                    source_url = contribution.get('source_url')
+                    source_public_key = contribution.get('source_public_key')
+                    
+                    if source_url and source_public_key:
+                        connection_details[node_id] = {
+                            'source_url': source_url,
+                            'source_public_key': source_public_key
+                        }
+                        logger.info(f"Found connection details for {node_id}: {source_url}")
+                    else:
+                        logger.warning(f"Incomplete connection details for {node_id}: url={bool(source_url)}, key={bool(source_public_key)}")
+                else:
+                    logger.warning(f"No contribution found for node {node_id} in aggregation data")
+            
+            return connection_details
                 
         except Exception as e:
             logger.error(f"Error retrieving node connection details: {e}")
             logger.error(traceback.format_exc())
             return {}
 
-    @staticmethod
-    def _make_aggregation_address(aggregation_id):
-        """Generate blockchain address for aggregation round"""
-        AGGREGATION_REQUEST_NAMESPACE = hashlib.sha512('aggregation-request'.encode()).hexdigest()[:6]
-        return AGGREGATION_REQUEST_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
+    # _make_aggregation_address method removed - using existing _fetch_aggregation_round_from_blockchain instead
 
     async def _handle_aggregation_failure(self, aggregation_id: str, error_reason: str):
         """Handle aggregation failure"""
