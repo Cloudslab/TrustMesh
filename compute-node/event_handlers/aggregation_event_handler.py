@@ -751,10 +751,28 @@ class FederatedAggregator:
                 'validation_metrics': validation_metrics or {}
             }
             
-            # Send to each participating IoT node via ZMQ
+            # Get IoT node connection details from blockchain state
+            node_connections = await self._get_node_connection_details(workflow_id, global_round_number, participating_nodes)
+            
+            # Send to each participating IoT node via ZMQ with proper CURVE authentication
             for node_id in participating_nodes:
                 zmq_socket = None
                 try:
+                    # Get IoT node connection details
+                    node_connection = node_connections.get(node_id)
+                    if not node_connection:
+                        logger.error(f"No connection details found for IoT node {node_id}")
+                        continue
+                    
+                    source_url = node_connection.get('source_url')
+                    source_public_key = node_connection.get('source_public_key')
+                    
+                    if not source_url or not source_public_key:
+                        logger.error(f"Missing connection details for {node_id}: url={bool(source_url)}, key={bool(source_public_key)}")
+                        continue
+                    
+                    logger.info(f"Connecting to IoT node {node_id} at {source_url} with proper CURVE authentication")
+                    
                     # Connect to IoT node's ZMQ response port with CURVE authentication
                     zmq_socket = zmq_context.socket(zmq.REQ)
                     
@@ -767,9 +785,9 @@ class FederatedAggregator:
                     
                     zmq_socket.curve_secretkey = client_secret
                     zmq_socket.curve_publickey = client_public
-                    # Note: IoT nodes act as CURVE servers - server key validation handled by IoT node
+                    zmq_socket.curve_serverkey = source_public_key.encode('ascii')  # Use IoT node's public key
                     
-                    zmq_socket.connect(f"tcp://{node_id}:5555")  # Standard IoT node ZMQ port
+                    zmq_socket.connect(source_url)  # Use IoT node's actual URL
                     
                     # Send aggregated model
                     await zmq_socket.send_string(json.dumps(broadcast_data))
@@ -813,6 +831,56 @@ class FederatedAggregator:
             logger.error(f"Error broadcasting aggregated model: {e}")
             if 'zmq_context' in locals():
                 zmq_context.term()
+
+    async def _get_node_connection_details(self, workflow_id: str, global_round_number: int, participating_nodes: List[str]) -> Dict[str, Dict]:
+        """Retrieve IoT node connection details from blockchain state"""
+        try:
+            logger.info(f"Retrieving connection details for {len(participating_nodes)} nodes from blockchain")
+            
+            # Get aggregation round data from blockchain
+            aggregation_id = f"{workflow_id}_agg_{global_round_number}"
+            address = self._make_aggregation_address(aggregation_id)
+            
+            # Query blockchain state
+            request = ClientStateGetRequest(address=address)
+            response_future = self.stream.send(
+                message_type=Message.CLIENT_STATE_GET_REQUEST,
+                content=request.SerializeToString()
+            )
+            response = ClientStateGetResponse()
+            response.ParseFromString(await response_future)
+            
+            if response.status == ClientStateGetResponse.OK and response.value:
+                aggregation_data = json.loads(response.value.decode())
+                node_contributions = aggregation_data.get('node_contributions', {})
+                
+                connection_details = {}
+                for node_id in participating_nodes:
+                    if node_id in node_contributions:
+                        contribution = node_contributions[node_id]
+                        connection_details[node_id] = {
+                            'source_url': contribution.get('source_url'),
+                            'source_public_key': contribution.get('source_public_key')
+                        }
+                        logger.info(f"Found connection details for {node_id}: {contribution.get('source_url')}")
+                    else:
+                        logger.warning(f"No contribution found for node {node_id} in aggregation data")
+                
+                return connection_details
+            else:
+                logger.error(f"Failed to retrieve aggregation data from blockchain: {response.status}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Error retrieving node connection details: {e}")
+            logger.error(traceback.format_exc())
+            return {}
+
+    @staticmethod
+    def _make_aggregation_address(aggregation_id):
+        """Generate blockchain address for aggregation round"""
+        AGGREGATION_REQUEST_NAMESPACE = hashlib.sha512('aggregation-request'.encode()).hexdigest()[:6]
+        return AGGREGATION_REQUEST_NAMESPACE + hashlib.sha512(aggregation_id.encode()).hexdigest()[:64]
 
     async def _handle_aggregation_failure(self, aggregation_id: str, error_reason: str):
         """Handle aggregation failure"""

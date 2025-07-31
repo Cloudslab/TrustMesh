@@ -390,7 +390,9 @@ class AggregationRequestTransactionHandler(TransactionHandler):
                     initial_node_id: {
                         'weights_doc_id': initial_weights_doc_id,
                         'weights_hash': content_hash,
-                        'metadata': initial_payload.get('metadata', {})
+                        'metadata': initial_payload.get('metadata', {}),
+                        'source_url': initial_payload.get('source_url'),
+                        'source_public_key': initial_payload.get('source_public_key')
                     }
                 },
                 'min_nodes_required': MIN_NODES_FOR_AGGREGATION,
@@ -449,7 +451,9 @@ class AggregationRequestTransactionHandler(TransactionHandler):
             round_data['node_contributions'][node_id] = {
                 'weights_doc_id': weights_doc_id,
                 'weights_hash': content_hash,
-                'metadata': payload.get('metadata', {})
+                'metadata': payload.get('metadata', {}),
+                'source_url': payload.get('source_url'),
+                'source_public_key': payload.get('source_public_key')
             }
             
             # Update state

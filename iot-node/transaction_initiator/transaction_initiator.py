@@ -246,7 +246,8 @@ class TransactionCreator:
             raise
 
 
-    def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=None, metadata=None):
+    def create_aggregation_request(self, workflow_id, node_id, model_weights, round_number=None, metadata=None, 
+                                 iot_port=None, iot_public_key=None):
         """
         Create and submit aggregation request transaction for federated learning.
         This is the second phase of federated learning where trained model weights are submitted for aggregation.
@@ -264,6 +265,12 @@ class TransactionCreator:
                 "timestamp": timestamp,
                 "metadata": metadata or {}
             }
+            
+            # Include IoT node connection details for ZMQ broadcasting
+            if iot_port and iot_public_key:
+                aggregation_payload["source_url"] = f"{IOT_URL}:{iot_port}"
+                aggregation_payload["source_public_key"] = iot_public_key
+                logger.info(f"Added IoT connection details: {IOT_URL}:{iot_port}")
             
             # Only include round_number for backward compatibility, but it will be ignored by the TP
             if round_number is not None:
@@ -333,7 +340,9 @@ class TransactionCreator:
                         "training_samples": len(training_data.get('x_train', [])) if training_data else 0,
                         "node_classes": training_data.get('assigned_classes', []) if training_data else [],
                         "training_timestamp": int(time.time())
-                    }
+                    },
+                    iot_port=iot_port,
+                    iot_public_key=iot_public_key
                 )
             else:
                 raise ValueError(f"Invalid phase: {phase}. Must be 'training' or 'aggregation'")
