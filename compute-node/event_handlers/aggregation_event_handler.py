@@ -672,14 +672,7 @@ class FederatedAggregator:
                 result = future.result()
                 
                 logger.info(f"Aggregation confirmation submitted: {result}")
-                
-                # Broadcast aggregated model to participating nodes via ZMQ
-                await self._broadcast_aggregated_model(
-                    aggregated_weights, 
-                    participating_nodes, 
-                    workflow_id, 
-                    global_round_number
-                )
+                # Note: Broadcast will happen after consensus in the event handler
                 
         except Exception as e:
             logger.error(f"Error submitting aggregation confirmation: {e}")
@@ -759,9 +752,22 @@ class FederatedAggregator:
             
             # Send to each participating IoT node via ZMQ
             for node_id in participating_nodes:
+                zmq_socket = None
                 try:
-                    # Connect to IoT node's ZMQ response port
+                    # Connect to IoT node's ZMQ response port with CURVE authentication
                     zmq_socket = zmq_context.socket(zmq.REQ)
+                    
+                    # Set up CURVE authentication (same as task_executor pattern)
+                    # Generate temporary keys for this broadcast
+                    import tempfile
+                    keys_dir = tempfile.mkdtemp(prefix='broadcast_keys_')
+                    client_public_file, client_secret_file = zmq.auth.create_certificates(keys_dir, "aggregator_client")
+                    client_public, client_secret = zmq.auth.load_certificate(client_secret_file)
+                    
+                    zmq_socket.curve_secretkey = client_secret
+                    zmq_socket.curve_publickey = client_public
+                    # Note: IoT nodes act as CURVE servers - server key validation handled by IoT node
+                    
                     zmq_socket.connect(f"tcp://{node_id}:5555")  # Standard IoT node ZMQ port
                     
                     # Send aggregated model
@@ -769,18 +775,23 @@ class FederatedAggregator:
                     
                     # Wait for acknowledgment
                     response = await asyncio.wait_for(zmq_socket.recv_string(), timeout=10.0)
-                    response_data = json.loads(response)
                     
-                    if response_data.get('status') == 'received':
+                    # IoT nodes typically return simple acknowledgment strings
+                    if "received" in response.lower() or "message received" in response.lower():
                         logger.info(f"✓ Successfully broadcasted aggregated model to {node_id}")
                     else:
-                        logger.warning(f"⚠ Unexpected response from {node_id}: {response_data}")
+                        logger.warning(f"⚠ Unexpected response from {node_id}: {response}")
                     
-                    zmq_socket.close()
+                    # Clean up temporary keys
+                    import shutil
+                    shutil.rmtree(keys_dir)
                     
                 except Exception as e:
                     logger.error(f"✗ Failed to broadcast to {node_id}: {e}")
-                    if 'zmq_socket' in locals():
+                    logger.error(f"   • Error type: {type(e).__name__}")
+                    logger.error(f"   • Error details: {str(e)}")
+                finally:
+                    if zmq_socket:
                         zmq_socket.close()
             
             # Also publish to Redis pub/sub for inter-compute coordination

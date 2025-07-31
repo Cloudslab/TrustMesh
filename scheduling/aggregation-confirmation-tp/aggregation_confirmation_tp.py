@@ -90,12 +90,9 @@ class MNISTNet(nn.Module):
 
 class AggregationConfirmationTransactionHandler(TransactionHandler):
     def __init__(self):
-        self.redis = None
         self.couchdb_client = None
         self.couchdb_certs = []
-        self.loop = asyncio.get_event_loop()
         self._initialize_couchdb()
-        self._initialize_redis()
 
     @property
     def family_name(self):
@@ -154,7 +151,7 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 decode_responses=True
             )
 
-            self.loop.run_until_complete(self.redis.ping())
+            # Redis not needed - validation only requires CouchDB
             logger.info("Connected to Redis cluster successfully")
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {str(e)}")
@@ -708,7 +705,8 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
             logger.info("Performing MNIST validation dataset evaluation")
             
             # Retrieve validation dataset from CouchDB
-            validation_data = self.loop.run_until_complete(self._get_validation_dataset())
+            # Get validation dataset synchronously in transaction processor
+            validation_data = self._get_validation_dataset_sync()
             
             if not validation_data:
                 logger.warning("Validation dataset not available, skipping MNIST validation")
@@ -793,6 +791,37 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
         model = MNISTNet(num_classes=NUM_CLASSES)
         model.eval()  # Set to evaluation mode
         return model
+
+    def _get_validation_dataset_sync(self) -> Dict:
+        """Retrieve validation dataset from CouchDB synchronously for transaction processor"""
+        try:
+            # Get validation dataset from CouchDB
+            stored_doc = self.couchdb_client.get_document(db=COUCHDB_DB, doc_id=VALIDATION_DATASET_DOC_ID).get_result()
+            if not stored_doc:
+                logger.warning("Validation dataset not found in CouchDB")
+                return None
+            
+            # Verify data integrity
+            x_data = np.array(stored_doc['x_data'])
+            y_data = np.array(stored_doc['y_data'])
+            metadata = stored_doc['metadata']
+            
+            # Check hashes for data integrity
+            data_hash = hashlib.sha256(x_data.tobytes()).hexdigest()
+            if data_hash != metadata['data_hash']:
+                logger.error("Validation dataset integrity check failed")
+                return None
+            
+            logger.info(f"Retrieved validation dataset from CouchDB: {len(x_data)} samples")
+            return {
+                'x_data': stored_doc['x_data'],
+                'y_data': stored_doc['y_data'],
+                'metadata': metadata
+            }
+            
+        except Exception as e:
+            logger.error(f"Error retrieving validation dataset from CouchDB: {e}")
+            return None
 
     async def _get_validation_dataset(self) -> Dict:
         """Retrieve validation dataset from CouchDB"""
