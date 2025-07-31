@@ -815,19 +815,24 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 logger.warning("Validation dataset not found in CouchDB")
                 return None
             
-            # Verify data integrity
-            x_data = np.array(stored_doc['x_data'])
-            y_data = np.array(stored_doc['y_data'])
+            # Verify data integrity with proper dtype restoration
             metadata = stored_doc['metadata']
             
-            # Check hashes for data integrity (with graceful fallback)
+            # Restore arrays with original dtypes to ensure hash consistency
+            x_dtype = metadata.get('x_dtype', 'float32')  # Default to float32 for backward compatibility
+            y_dtype = metadata.get('y_dtype', 'int64')    # Default to int64 for backward compatibility
+            
+            x_data = np.array(stored_doc['x_data'], dtype=x_dtype)
+            y_data = np.array(stored_doc['y_data'], dtype=y_dtype)
+            
+            # Check hashes for data integrity
             data_hash = hashlib.sha256(x_data.tobytes()).hexdigest()
             expected_hash = metadata['data_hash']
             if data_hash != expected_hash:
-                logger.warning(f"Validation dataset hash mismatch - expected: {expected_hash[:16]}..., got: {data_hash[:16]}...")
-                logger.warning(f"This may be due to numpy array type differences - proceeding with validation")
-                logger.warning(f"Dataset shape: {x_data.shape}, dtype: {x_data.dtype}")
-                # Continue anyway - hash mismatch doesn't mean the data is corrupt
+                logger.error(f"Validation dataset hash mismatch - expected: {expected_hash[:16]}..., got: {data_hash[:16]}...")
+                logger.error(f"Dataset shape: {x_data.shape}, x_dtype: {x_data.dtype}, y_dtype: {y_data.dtype}")
+                logger.error("Data integrity check failed - dataset may be corrupted")
+                return None
             
             logger.info(f"Retrieved validation dataset from CouchDB: {len(x_data)} samples")
             return {
@@ -849,15 +854,23 @@ class AggregationConfirmationTransactionHandler(TransactionHandler):
                 logger.warning("Validation dataset not found in CouchDB")
                 return None
             
-            # Verify data integrity
-            x_data = np.array(stored_doc['x_data'])
-            y_data = np.array(stored_doc['y_data'])
+            # Verify data integrity with proper dtype restoration
             metadata = stored_doc['metadata']
+            
+            # Restore arrays with original dtypes to ensure hash consistency
+            x_dtype = metadata.get('x_dtype', 'float32')  # Default to float32 for backward compatibility
+            y_dtype = metadata.get('y_dtype', 'int64')    # Default to int64 for backward compatibility
+            
+            x_data = np.array(stored_doc['x_data'], dtype=x_dtype)
+            y_data = np.array(stored_doc['y_data'], dtype=y_dtype)
             
             # Check hashes for data integrity
             data_hash = hashlib.sha256(x_data.tobytes()).hexdigest()
-            if data_hash != metadata['data_hash']:
-                logger.error("Validation dataset integrity check failed")
+            expected_hash = metadata['data_hash']
+            if data_hash != expected_hash:
+                logger.error(f"Validation dataset hash mismatch - expected: {expected_hash[:16]}..., got: {data_hash[:16]}...")
+                logger.error(f"Dataset shape: {x_data.shape}, x_dtype: {x_data.dtype}, y_dtype: {y_data.dtype}")
+                logger.error("Data integrity check failed - dataset may be corrupted")
                 return None
             
             logger.info(f"Retrieved validation dataset from CouchDB: {len(x_data)} samples")

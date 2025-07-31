@@ -159,13 +159,15 @@ class MNISTValidationDatasetDistributor:
             validation_x = np.array(validation_x)
             validation_y = np.array(validation_y)
             
-            # Create metadata
+            # Create metadata with dtype information for consistent retrieval
             metadata = {
                 'total_samples': len(validation_x),
                 'samples_per_class': VALIDATION_SAMPLES_PER_CLASS,
                 'num_classes': 10,
                 'seed': VALIDATION_SEED,
                 'shape': validation_x.shape,
+                'x_dtype': str(validation_x.dtype),  # Store x_data dtype
+                'y_dtype': str(validation_y.dtype),  # Store y_data dtype
                 'created_time': time.time(),
                 'class_distribution': {str(i): VALIDATION_SAMPLES_PER_CLASS for i in range(10)},
                 'data_hash': hashlib.sha256(validation_x.tobytes()).hexdigest(),

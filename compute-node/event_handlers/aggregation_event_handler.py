@@ -11,6 +11,7 @@ import threading
 import numpy as np
 import zmq
 import zmq.asyncio
+import zmq.auth
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any
 
