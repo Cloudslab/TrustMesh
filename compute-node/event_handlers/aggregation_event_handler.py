@@ -125,6 +125,9 @@ class FederatedAggregator:
         self.redis = redis_client
         self.pending_aggregations = {}
         
+        # Add thread lock for synchronizing aggregation start operations
+        self.aggregation_lock = threading.Lock()
+        
         # Create a dedicated event loop for this aggregator if one doesn't exist
         try:
             self.loop = asyncio.get_event_loop()
@@ -134,6 +137,29 @@ class FederatedAggregator:
             asyncio.set_event_loop(self.loop)
         
         logger.info(f"Initialized FederatedAggregator for node {node_id}")
+
+    def start_aggregation_collection_if_needed(self, aggregation_id: str, workflow_id: str, 
+                                             global_round_number: int, expected_nodes: List[str]) -> bool:
+        """
+        Thread-safe method to start aggregation collection only if not already started.
+        Returns True if collection was started by this call, False if already in progress.
+        """
+        with self.aggregation_lock:
+            if aggregation_id in self.pending_aggregations:
+                logger.info(f"🔄 Aggregation round {aggregation_id} already in progress")
+                return False
+            
+            # Mark as started immediately to prevent race conditions
+            self.pending_aggregations[aggregation_id] = {
+                'workflow_id': workflow_id,
+                'global_round_number': global_round_number,
+                'expected_nodes': expected_nodes,
+                'start_time': time.time(),
+                'status': 'initializing'  # Will be updated to 'collecting' by start_aggregation_collection
+            }
+            
+            logger.info(f"🎯 Starting new aggregation collection for {aggregation_id}")
+            return True
 
     async def start_aggregation_collection(self, aggregation_id: str, workflow_id: str, 
                                          global_round_number: int, expected_nodes: List[str]):
@@ -148,13 +174,13 @@ class FederatedAggregator:
             logger.info(f"  └─ Deadline: {time.strftime('%H:%M:%S', time.localtime(deadline))}")
             logger.info(f"  └─ Expected Nodes: {expected_nodes}")
             
-            # Store aggregation metadata
-            self.pending_aggregations[aggregation_id] = {
-                'workflow_id': workflow_id,
-                'global_round_number': global_round_number,  # Use global round instead of IoT round
-                'expected_nodes': expected_nodes,
-                'start_time': start_time
-            }
+            # Update aggregation metadata (already created by start_aggregation_collection_if_needed)
+            with self.aggregation_lock:
+                if aggregation_id in self.pending_aggregations:
+                    self.pending_aggregations[aggregation_id].update({
+                        'status': 'collecting',  # Update from 'initializing' to 'collecting'
+                        'actual_start_time': start_time  # Record when timer actually started
+                    })
             
             # Start collection timer
             logger.info(f"⏱️  Starting {AGGREGATION_TIMEOUT}s timer for {aggregation_id}")
@@ -900,9 +926,11 @@ class FederatedAggregator:
             
             await self.redis.publish('federated_events', json.dumps(failure_event))
             
-            # Clean up
-            if aggregation_id in self.pending_aggregations:
-                del self.pending_aggregations[aggregation_id]
+            # Clean up with thread safety
+            with self.aggregation_lock:
+                if aggregation_id in self.pending_aggregations:
+                    del self.pending_aggregations[aggregation_id]
+                    logger.info(f"🧹 Cleaned up failed aggregation: {aggregation_id}")
                 
         except Exception as e:
             logger.error(f"Error handling aggregation failure: {e}")
@@ -960,27 +988,33 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                     logger.error(f"❌ Error scheduling CouchDB storage: {e}")
                     logger.error(traceback.format_exc())
             
-            # Start aggregation collection asynchronously (only if not already started)
-            # Use run_coroutine_threadsafe to schedule the task in the aggregator's event loop
-            if aggregation_id not in aggregator.pending_aggregations:
-                try:
-                    # Get expected nodes from environment or default
-                    expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
-                    
+            # Use thread-safe method to start aggregation collection only if not already started
+            try:
+                # Get expected nodes from environment or default
+                expected_nodes = os.getenv('FEDERATED_EXPECTED_NODES', 'iot-0,iot-1,iot-2,iot-3,iot-4').split(',')
+                
+                # Check if we should start aggregation collection (thread-safe)
+                should_start = aggregator.start_aggregation_collection_if_needed(
+                    aggregation_id, workflow_id, global_round_number, expected_nodes
+                )
+                
+                if should_start:
+                    # Start aggregation collection asynchronously
                     loop = aggregator.loop
                     future = asyncio.run_coroutine_threadsafe(
                         aggregator.start_aggregation_collection(
                             aggregation_id, workflow_id, global_round_number, expected_nodes
                         ), loop
                     )
-                    logger.info(f"Scheduled aggregation collection task for {aggregation_id}")
+                    logger.info(f"✅ Scheduled NEW aggregation collection task for {aggregation_id}")
                     # Log any immediate exceptions
                     loop.call_soon_threadsafe(lambda: logger.info(f"Event loop is running: {loop.is_running()}"))
-                except Exception as e:
-                    logger.error(f"❌ Error scheduling aggregation collection: {e}")
-                    logger.error(traceback.format_exc())
-            else:
-                logger.info(f"🔄 Aggregation round {aggregation_id} already in progress, added contribution from {node_id}")
+                else:
+                    logger.info(f"🔄 Aggregation round {aggregation_id} already in progress, added contribution from {node_id}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error scheduling aggregation collection: {e}")
+                logger.error(traceback.format_exc())
         else:
             # This node received the event but is not the designated aggregator
             logger.info(f"📢 Received aggregation event for {aggregation_id}")
@@ -1044,6 +1078,13 @@ def handle_aggregation_event(event, aggregator: FederatedAggregator):
                     ), loop
                 )
                 logger.info(f"Scheduled broadcast task for {aggregation_id}")
+                
+                # Clean up completed aggregation with thread safety
+                with aggregator.aggregation_lock:
+                    if aggregation_id in aggregator.pending_aggregations:
+                        del aggregator.pending_aggregations[aggregation_id]
+                        logger.info(f"🧹 Cleaned up completed aggregation: {aggregation_id}")
+                        
             except Exception as e:
                 logger.error(f"Error scheduling broadcast: {e}")
                 logger.error(traceback.format_exc())
