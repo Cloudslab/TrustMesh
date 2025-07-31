@@ -55,7 +55,7 @@ class MNISTNet(nn.Module):
         x = F.relu(self.conv3(x))
         x = self.flatten(x)
         x = self.dropout(F.relu(self.fc1(x)))
-        x = F.softmax(self.fc2(x), dim=1)
+        x = self.fc2(x)  # Return raw logits for CrossEntropyLoss
         return x
 
 

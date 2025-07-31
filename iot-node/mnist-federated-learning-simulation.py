@@ -20,6 +20,7 @@ import json
 import re
 import os
 import sys
+import random
 
 # Add federated learning extension to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'federated-learning-extension'))
@@ -63,7 +64,7 @@ class MNISTNet(nn.Module):
         x = F.relu(self.conv3(x))
         x = self.flatten(x)
         x = self.dropout(F.relu(self.fc1(x)))
-        x = F.softmax(self.fc2(x), dim=1)
+        x = self.fc2(x)  # Return raw logits for CrossEntropyLoss
         return x
 
 
@@ -728,9 +729,15 @@ class MNISTFederatedNode:
                 logger.info(f"   • Phases completed: Training → Aggregation → Validation")
                 
                 if round_num < max_rounds:
+                    # Random wait time between 1.5-5 minutes after each round
+                    wait_time_seconds = random.uniform(90, 300)  # 1.5 to 5 minutes
+                    wait_time_minutes = wait_time_seconds / 60
+                    
                     logger.info(f"   • Preparing for round {round_num + 1}...")
-                    logger.info(f"   • Inter-round pause: 10 seconds")
-                    time.sleep(10)
+                    logger.info(f"   • Random inter-round pause: {wait_time_minutes:.1f} minutes ({wait_time_seconds:.1f}s)")
+                    logger.info(f"   • This simulates realistic IoT node availability patterns")
+                    
+                    time.sleep(wait_time_seconds)
                 else:
                     logger.info(f"   • This was the final round ({max_rounds})")
             
