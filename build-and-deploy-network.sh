@@ -1051,7 +1051,7 @@ items:"
               image: murtazahr/workflow-creation-client:latest
               env:
                 - name: VALIDATOR_URL
-                  value: \"tcp://sawtooth-0:4004\"
+                  value: \"tcp://sawtooth-0:4004\""
 
     echo "$yaml_content"
 }
