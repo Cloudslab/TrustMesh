@@ -1053,12 +1053,6 @@ items:"
                 - name: VALIDATOR_URL
                   value: \"tcp://sawtooth-0:4004\"
 
-            - name: scheduling-client
-              image: murtazahr/scheduling-client:latest
-              env:
-                - name: VALIDATOR_URL
-                  value: \"tcp://sawtooth-0:4004\""
-
     echo "$yaml_content"
 }
 
